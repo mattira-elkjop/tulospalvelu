@@ -1,45 +1,44 @@
 "use strict";
+/* Lagets poängliga / Joukkueen pistepörssi
+   Data hämtas från tulospalvelu.leijonat.fi. Egna matcher (träning, turnering) kan läggas till för hand.
+   Inga spelarnamn i koden: truppen hämtas från tulospalvelu. */
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const LS={get(k,d){try{const v=localStorage.getItem("lp_"+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem("lp_"+k,JSON.stringify(v))}catch(e){}}};
 const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
 const uid=()=>"x"+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const uniq=a=>[...new Set(a.filter(Boolean))];
-const TITLES={pts:"Poängliga",g:"Målliga",a:"Assistliga",u:"Utvisningsliga",pm:"Plus/minus"};
+
+/* ---------- språk ---------- */
+let LANG=LS.get("lang",null)||((typeof navigator!=="undefined"&&/^fi/i.test(navigator.language||""))?"fi":"sv");
+const T=(sv,fi)=>LANG==="fi"?fi:sv;
+const loc=()=>LANG==="fi"?"fi-FI":"sv-SE";
+const TITLES=()=>({pts:T("Poängliga","Pistepörssi"),g:T("Målliga","Maalipörssi"),a:T("Assistliga","Syöttöpörssi"),u:T("Utvisningsliga","Jäähypörssi"),pm:T("Plus/minus","Plus/miinus")});
+/* Matchtyper: serie = från tulospalvelu, tr = träningsmatch, cup = turnering */
+const MT=()=>({serie:[T("Seriematch","Sarjaottelu"),T("Seriematcher","Sarjaottelut")],tr:[T("Träningsmatch","Harjoitusottelu"),T("Träningsmatcher","Harjoitusottelut")],cup:[T("Turnering","Turnaus"),T("Turneringar","Turnaukset")]});
 
 /* ---------- lagring (localStorage på den här enheten) ---------- */
 const KEY="lp_data_v1";
 let storageOK=true;
-const SEED=[]; /* Inga namn i koden: spelarna hämtas från tulospalvelu. */ /* Inga namn i koden: spelarna hämtas från tulospalvelu. */
-function newSeason(lag,serie,sasong,players,created){return {id:uid(),lag,serie:serie||"",sasong:sasong||"",created:created||Date.now(),pm:false,players:players||[],matches:[],goals:[],ga:[],pens:[]}}
+function newSeason(lag,serie,sasong,players,created){return {id:uid(),lag,serie:serie||"",sasong:sasong||"",created:created||Date.now(),pm:false,players:players||[],matches:[],goals:[],ga:[],pens:[],tpSkip:[]}}
 function seedData(){
-  const s=newSeason("MIF","U13 Valkoinen, lohko 3b","2026–2027",SEED.map(([nr,name])=>({id:uid(),nr,name,pos:nr>=90?"MV":"UP"})),1);
+  const s=newSeason("MIF","U13 Valkoinen, lohko 3b","2026–2027",[],1);
   s.tp={season:2027,ssid:4378,tid:1368627176,serieId:1787};
   return {v:2,last:null,changes:0,seasons:[s]};
 }
-/* Gör om äldre data (mål utan match) till matcher. Deltagare = alla som har statistik i matchen. */
-function migrateSeason(s){
-  s.players=s.players||[];s.goals=s.goals||[];s.pens=s.pens||[];s.ga=s.ga||[];s.pm=!!s.pm;
-  if(!Array.isArray(s.matches))s.matches=[];
-  const ids=new Set(s.matches.map(m=>m.id));
-  const orphan=[...s.goals,...s.pens,...s.ga].filter(e=>!e.mid||!ids.has(e.mid));
-  const groups=new Map();
-  orphan.forEach(e=>{const k=(e.date||"")+"\u0001"+(e.opp||"");if(!groups.has(k))groups.set(k,[]);groups.get(k).push(e)});
-  groups.forEach((list,k)=>{
-    const [date,opp]=k.split("\u0001");
-    const m={id:uid(),date,opp,players:[],ts:Math.min(...list.map(e=>e.ts||0)),auto:true};
-    list.forEach(e=>{e.mid=m.id;delete e.date;delete e.opp});
-    s.matches.push(m);
-  });
+/* Ser till att alla fält finns och att alla som har statistik i en match räknas som deltagare. */
+function fixSeason(s){
+  ["players","matches","goals","ga","pens","tpSkip"].forEach(k=>{if(!Array.isArray(s[k]))s[k]=[]});
+  s.pm=!!s.pm;
   s.goals.forEach(g=>{g.ice=Array.isArray(g.ice)?g.ice:[]});s.ga.forEach(x=>{x.ice=Array.isArray(x.ice)?x.ice:[]});
-  s.matches.forEach(m=>{m.players=uniq(Array.isArray(m.players)?m.players:[])});
+  s.matches.forEach(m=>{m.players=uniq(Array.isArray(m.players)?m.players:[]);delete m.auto;if(!m.type)m.type=m.gid?"serie":"tr"});
   const need=[...s.goals.map(g=>[g.mid,[g.scorer,g.a1,g.a2,...g.ice]]),...s.pens.map(p=>[p.mid,[p.pid]]),...s.ga.map(x=>[x.mid,x.ice])];
   need.forEach(([mid,list])=>{const m=s.matches.find(x=>x.id===mid);if(m)list.filter(Boolean).forEach(id=>{if(!m.players.includes(id))m.players.push(id)})});
   return s;
 }
 function loadData(){
   try{localStorage.setItem(KEY+"_t","1");localStorage.removeItem(KEY+"_t")}catch(e){storageOK=false}
-  try{const r=localStorage.getItem(KEY);if(r){const d=JSON.parse(r);if(d&&Array.isArray(d.seasons)){d.changes=d.changes||0;d.seasons.forEach(migrateSeason);d.v=2;return d}}}catch(e){}
+  try{const r=localStorage.getItem(KEY);if(r){const d=JSON.parse(r);if(d&&Array.isArray(d.seasons)){d.changes=d.changes||0;d.seasons.forEach(fixSeason);d.v=2;return d}}}catch(e){}
   return seedData();
 }
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(D))}catch(e){storageOK=false}}
@@ -48,44 +47,76 @@ let sid=LS.get("sid",null);
 if(!D.seasons.find(s=>s.id===sid))sid=D.seasons[0]?D.seasons[0].id:null;
 let players=[],toastTimer=null;
 const S={
-  tab:LS.get("tab","lista"),stat:LS.get("stat","pts"),top:LS.get("top","alla"),hide:LS.get("hide",true),shot:false,
+  tab:LS.get("tab","lista"),stat:LS.get("stat","pts"),top:LS.get("top","alla"),hide:LS.get("hide",true),
+  ftype:LS.get("ftype","all"),fper:LS.get("fper","all"),shot:false,
   mid:LS.get("mid",null),mform:null,ev:null,edit:null,sheet:false,toast:null,confirm:null,pending:false,imp:null,csvText:null,
-  link:null,sync:null
+  link:null,sync:null,conflicts:[]
 };
-if(S.tab==="add"||S.tab==="hist")S.tab="matcher";
+if(!["lista","matcher","spel","data"].includes(S.tab))S.tab="lista";
 const cur=()=>D.seasons.find(s=>s.id===sid);
 const nrCmp=(a,b)=>(Number(a.nr)||0)-(Number(b.nr)||0);
 function sync(){const s=cur();players=s?s.players.slice().sort(nrCmp):[]}
-function changed(){D.changes=(D.changes||0)+1;persist();sync();render(true)}
+const vis=()=>players.filter(p=>!p.hide);
+/* own=false för ändringar som kan hämtas igen från tulospalvelu (räknas inte som osparade) */
+function changed(own){if(own!==false)D.changes=(D.changes||0)+1;persist();sync();render(true)}
 const pById=id=>players.find(p=>p.id===id);
-const pname=id=>{const p=pById(id);return p?p.name:"Okänd spelare"};
-const plabel=id=>{const p=pById(id);return p?"#"+p.nr+" "+p.name:"Okänd spelare"};
+const pname=id=>{const p=pById(id);return p?p.name:T("Okänd spelare","Tuntematon pelaaja")};
+const plabel=id=>{const p=pById(id);return p?"#"+p.nr+" "+p.name:T("Okänd spelare","Tuntematon pelaaja")};
 const short=n=>{const w=String(n||"").trim().split(/\s+/);return w.length>1?w[0][0]+". "+w[w.length-1]:w[0]||""};
 const nrs=ids=>ids.map(pById).filter(Boolean).sort(nrCmp).map(p=>p.nr).join(", ");
 const matchOf=id=>{const s=cur();return s?s.matches.find(m=>m.id===id):null};
 const evOf=m=>{const s=cur();return [...s.goals.filter(x=>x.mid===m.id).map(x=>({t:"g",x})),...s.ga.filter(x=>x.mid===m.id).map(x=>({t:"ga",x})),...s.pens.filter(x=>x.mid===m.id).map(x=>({t:"u",x}))].sort((a,b)=>(a.x.ts||0)-(b.x.ts||0))};
-const score=m=>{const s=cur();return [s.goals.filter(x=>x.mid===m.id).length,s.ga.filter(x=>x.mid===m.id).length]};
-const sortedMatches=()=>cur().matches.slice().sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))||(b.ts||0)-(a.ts||0));
+const mtype=m=>m.type||(m.gid?"serie":"tr");
+/* Låst = hämtad med fullständigt protokoll. Schemamatcher (nores) och egna matcher går att redigera. */
+const locked=m=>!!m.gid&&!m.nores;
+const hasEvents=m=>{const s=cur();return s.goals.some(x=>x.mid===m.id)||s.ga.some(x=>x.mid===m.id)};
+/* Resultat: räknas från målen, annars ett ifyllt slutresultat. null = inget resultat. */
+function score(m){
+  const s=cur();
+  if(hasEvents(m)||locked(m))return [s.goals.filter(x=>x.mid===m.id).length,s.ga.filter(x=>x.mid===m.id).length];
+  return Array.isArray(m.res)?m.res:null;
+}
+const fmtScore=sc=>sc?sc[0]+"–"+sc[1]:"–";
+const played=m=>locked(m)||hasEvents(m)||Array.isArray(m.res)||m.players.length>0;
+const byDateDesc=(a,b)=>String(b.date||"").localeCompare(String(a.date||""))||(b.ts||0)-(a.ts||0);
+const sortedMatches=()=>cur().matches.slice().sort(byDateDesc);
 function fmtDate(d,shortForm){
-  if(!d)return "Utan datum";
-  try{return new Date(d+"T12:00:00").toLocaleDateString("sv-SE",shortForm?{weekday:"short",day:"numeric",month:"short"}:{weekday:"long",day:"numeric",month:"long",year:"numeric"})}catch(e){return d}
+  if(!d)return T("Utan datum","Ei päivämäärää");
+  try{return new Date(d+"T12:00:00").toLocaleDateString(loc(),shortForm?{weekday:"short",day:"numeric",month:"short"}:{weekday:"long",day:"numeric",month:"long",year:"numeric"})}catch(e){return d}
+}
+
+/* ---------- filter ---------- */
+const typesIn=s=>uniq(s.matches.map(mtype));
+function ftype(){const s=cur();return S.ftype!=="all"&&typesIn(s).includes(S.ftype)?S.ftype:"all"}
+function fMatches(){
+  const s=cur(),t=ftype();
+  let ms=s.matches.filter(m=>t==="all"||mtype(m)===t);
+  if(S.fper!=="all")ms=ms.filter(played).sort(byDateDesc).slice(0,Number(S.fper));
+  return ms;
+}
+function filterLabel(){
+  const t=ftype(),parts=[];
+  if(t!=="all")parts.push(MT()[t][1]);
+  if(S.fper!=="all")parts.push(T("senaste "+S.fper+" matcherna","viimeiset "+S.fper+" ottelua"));
+  return parts.join(", ");
 }
 
 /* ---------- statistik ---------- */
-function computeStats(){
+function computeStats(ms){
   const s=cur(),m=new Map(players.map(p=>[p.id,{p,gp:0,g:0,a:0,u:0,pm:0}]));
+  ms=ms||s.matches;const ids=new Set(ms.map(x=>x.id));
   const inc=(id,f,v)=>{const o=m.get(id);if(o)o[f]+=v};
-  s.matches.forEach(x=>uniq(x.players).forEach(id=>inc(id,"gp",1)));
-  s.goals.forEach(x=>{inc(x.scorer,"g",1);[x.a1,x.a2].forEach(a=>a&&inc(a,"a",1));if(s.pm)uniq(x.ice).forEach(id=>inc(id,"pm",1))});
-  if(s.pm)s.ga.forEach(x=>uniq(x.ice).forEach(id=>inc(id,"pm",-1)));
-  s.pens.forEach(x=>inc(x.pid,"u",Number(x.min)||0));
+  ms.forEach(x=>uniq(x.players).forEach(id=>inc(id,"gp",1)));
+  s.goals.filter(x=>ids.has(x.mid)).forEach(x=>{inc(x.scorer,"g",1);[x.a1,x.a2].forEach(a=>a&&inc(a,"a",1));if(s.pm)uniq(x.ice).forEach(id=>inc(id,"pm",1))});
+  if(s.pm)s.ga.filter(x=>ids.has(x.mid)).forEach(x=>uniq(x.ice).forEach(id=>inc(id,"pm",-1)));
+  s.pens.filter(x=>ids.has(x.mid)).forEach(x=>inc(x.pid,"u",Number(x.min)||0));
   return [...m.values()].map(o=>({...o,pts:o.g+o.a}));
 }
 function statKey(){const s=cur();if(S.stat==="pm"&&!s.pm)S.stat="pts";return S.stat}
 function leaderboard(){
   const k=statKey();
   const cmp={pts:(x,y)=>y.pts-x.pts||y.g-x.g||x.gp-y.gp,g:(x,y)=>y.g-x.g||y.pts-x.pts||x.gp-y.gp,a:(x,y)=>y.a-x.a||y.pts-x.pts||x.gp-y.gp,u:(x,y)=>y.u-x.u||y.gp-x.gp,pm:(x,y)=>y.pm-x.pm||y.gp-x.gp}[k];
-  let rows=computeStats().sort((x,y)=>cmp(x,y)||nrCmp(x.p,y.p));
+  let rows=computeStats(fMatches()).filter(r=>!r.p.hide).sort((x,y)=>cmp(x,y)||nrCmp(x.p,y.p));
   if(S.hide)rows=rows.filter(r=>k==="pm"?r.gp>0:r[k]>0);
   let rank=0,prev=null;
   rows.forEach((r,i)=>{if(r[k]!==prev){rank=i+1;prev=r[k]}r.rank=rank});
@@ -96,226 +127,275 @@ const fmtPM=v=>v>0?"+"+v:String(v);
 
 /* ---------- vyer ---------- */
 function banner(){
-  const s=cur(),mins=s.pens.reduce((t,x)=>t+(Number(x.min)||0),0);
-  return `<div class="banner" ${S.shot?'data-a="unshot"':''}><h1>${esc(s.lag)} · ${TITLES[statKey()]}</h1><p>${esc([s.serie,s.sasong].filter(Boolean).join(" · "))}</p></div>
-  <div class="totals">Lag: ${s.matches.length} matcher · ${s.goals.length} mål${s.ga.length?" · "+s.ga.length+" insläppta":""} · ${mins} utv.min</div>`;
+  const s=cur(),ms=fMatches(),ids=new Set(ms.map(m=>m.id));
+  const g=s.goals.filter(x=>ids.has(x.mid)).length,ga=s.ga.filter(x=>ids.has(x.mid)).length;
+  const mins=s.pens.filter(x=>ids.has(x.mid)).reduce((t,x)=>t+(Number(x.min)||0),0);
+  const fl=filterLabel();
+  return `<div class="banner" ${S.shot?'data-a="unshot"':''}><h1>${esc(s.lag)} · ${TITLES()[statKey()]}</h1><p>${esc([s.serie,s.sasong].filter(Boolean).join(" · "))}${fl?`<br><b class="flt">${esc(fl)}</b>`:""}</p></div>
+  <div class="totals">${T("Lag","Joukkue")}: ${ms.length} ${T("matcher","ottelua")} · ${g} ${T("mål","maalia")}${ga?" · "+ga+" "+T("insläppta","päästettyä"):""} · ${mins} ${T("utv.min","jäähymin")}</div>`;
 }
 function viewLista(){
   const s=cur();if(!s)return emptyState();
   const k=statKey(),rows=leaderboard();
-  const cols=[["gp","Mat"],["g","Mål"],["a","Ass"],["pts","P"],["u","Utv"]];if(s.pm)cols.push(["pm","+/-"]);
-  const tmpl="28px 28px minmax(0,1fr) "+cols.map(c=>c[0]==="pts"?"36px":c[0]==="pm"?"36px":"32px").join(" ");
+  const cols=[["gp",T("Mat","O")],["g",T("Mål","M")],["a",T("Ass","S")],["pts","P"],["u",T("Utv","RM")]];if(s.pm)cols.push(["pm","+/-"]);
+  const tmpl="28px 28px minmax(0,1fr) "+cols.map(c=>c[0]==="pts"||c[0]==="pm"?"36px":"32px").join(" ");
   const max=Math.max(1,...rows.map(r=>Math.max(0,r[k])));
   const fmt=(c,v)=>c==="pm"?fmtPM(v):(v||"-");
-  const head=`<div class="row head"><div>#</div><div>Nr</div><div class="nm nmh">Spelare</div>${cols.map(([c,t])=>`<div class="${c===k?"hlh":""}">${t}</div>`).join("")}</div>`;
+  const head=`<div class="row head"><div>#</div><div>Nr</div><div class="nm nmh">${T("Spelare","Pelaaja")}</div>${cols.map(([c,t])=>`<div class="${c===k?"hlh":""}">${t}</div>`).join("")}</div>`;
+  const empty=s.matches.length?(fMatches().length?T("Ingen statistik i den här listan ännu.","Tässä listassa ei ole vielä tilastoja."):T("Inga matcher matchar filtret.","Suodatinta vastaavia otteluita ei ole.")):s.tp?T("Inga matcher ännu. Tryck på ↻ Hämta matcher.","Ei otteluita vielä. Paina ↻ Hae ottelut."):players.length?T("Inga matcher ännu. Lägg till en under Matcher.","Ei otteluita vielä. Lisää ottelu kohdassa Ottelut."):T("Inga spelare ännu. Lägg till dem under Spelare.","Ei pelaajia vielä. Lisää ne kohdassa Pelaajat.");
   const body=rows.length?rows.map(r=>`<div class="row"><div class="rk ${r.rank<=3?"r"+r.rank:""}">${r.rank}</div><div class="mu">${esc(r.p.nr)}</div><div class="nm"><span>${esc(r.p.name)}</span><div class="bar"><i style="width:${Math.round(Math.max(0,r[k])/max*100)}%"></i></div></div>${cols.map(([c])=>`<div class="${c===k?"hl":(r[c]||c==="pm"?"":"mu")}${c==="gp"?" gpc":""}">${fmt(c,r[c])}</div>`).join("")}</div>`).join("")
-    :`<div class="empty">${s.matches.length?"Ingen statistik i den här listan ännu.":s.tp?"Inga matcher ännu. Tryck på ↻ Hämta matcher.":players.length?"Inga matcher ännu. Lägg till en under Matcher.":"Inga spelare ännu. Lägg till dem under Spelare."}</div>`;
+    :`<div class="empty">${empty}</div>`;
   const card=`${banner()}<div class="table" style="--cols:${tmpl}">${head}${body}</div>`;
-  if(S.shot)return card+`<div class="hint"><span>Tryck på rubriken för att avsluta</span></div>`;
-  const segs=[["pts","Poäng"],["g","Mål"],["a","Assist"],["u","Utv"]];if(s.pm)segs.push(["pm","+/-"]);
+  if(S.shot)return card+`<div class="hint"><span>${T("Tryck på rubriken för att avsluta","Lopeta napauttamalla otsikkoa")}</span></div>`;
+  const segs=[["pts",T("Poäng","Pisteet")],["g",T("Mål","Maalit")],["a",T("Assist","Syötöt")],["u",T("Utv","Jäähyt")]];if(s.pm)segs.push(["pm","+/-"]);
   const seg=`<div class="seg" style="grid-template-columns:repeat(${segs.length},1fr)">${segs.map(([v,t])=>`<button data-a="stat" data-v="${v}" aria-pressed="${k===v}">${t}</button>`).join("")}</div>`;
-  const ctrls=`<div class="ctrls"><label>Visa <select class="in" id="topn" style="width:auto;min-height:40px">${["alla","5","10","15","20"].map(v=>`<option value="${v}" ${S.top===v?"selected":""}>${v==="alla"?"Alla":"Topp "+v}</option>`).join("")}</select></label>
-  <label><input type="checkbox" id="hide" ${S.hide?"checked":""}> ${k==="pm"?"Dölj spelare utan matcher":"Dölj nollor"}</label></div>
-  <div class="ctrls"><button class="btn primary" data-a="shot">Skärmbildsläge</button><button class="btn" data-a="copy">Kopiera som text</button>${s.tp?`<button class="btn" data-a="tp-sync" ${S.sync?"disabled":""}>${S.sync?"Hämtar…":"↻ Hämta matcher"}</button>`:""}</div>`;
-  return seg+ctrls+card+`<p class="note">Mat = spelade matcher. Skärmbildsläget döljer menyer och knappar så att du kan ta en skärmbild och dela i gruppen.</p>`;
+  const types=typesIn(s),sel=(id,opts,v)=>`<select class="in" id="${id}" style="width:auto;min-height:40px">${opts.map(([o,t])=>`<option value="${o}" ${String(v)===o?"selected":""}>${esc(t)}</option>`).join("")}</select>`;
+  const typeSel=types.length>1?`<label>${T("Matcher","Ottelut")} ${sel("f-type",[["all",T("Alla","Kaikki")],...["serie","tr","cup"].filter(t=>types.includes(t)).map(t=>[t,MT()[t][1]])],ftype())}</label>`:"";
+  const perSel=`<label>${T("Period","Jakso")} ${sel("f-per",[["all",T("Hela säsongen","Koko kausi")],["5",T("Senaste 5","Viimeiset 5")],["10",T("Senaste 10","Viimeiset 10")]],S.fper)}</label>`;
+  const ctrls=`<div class="ctrls">${typeSel}${perSel}</div>
+  <div class="ctrls"><label>${T("Visa","Näytä")} ${sel("topn",[["alla",T("Alla","Kaikki")],["5","Top 5"],["10","Top 10"],["15","Top 15"],["20","Top 20"]],S.top)}</label>
+  <label><input type="checkbox" id="hide" ${S.hide?"checked":""}> ${k==="pm"?T("Dölj spelare utan matcher","Piilota pelaajat ilman otteluita"):T("Dölj nollor","Piilota nollat")}</label></div>
+  <div class="ctrls"><button class="btn primary" data-a="shot">${T("Skärmbildsläge","Kuvakaappaustila")}</button><button class="btn" data-a="copy">${T("Kopiera som text","Kopioi tekstinä")}</button>${s.tp?`<button class="btn" data-a="tp-sync" ${S.sync?"disabled":""}>${S.sync?T("Hämtar…","Haetaan…"):T("↻ Hämta matcher","↻ Hae ottelut")}</button>`:""}</div>`;
+  return seg+ctrls+card+`<p class="note">${T("Mat = spelade matcher. Skärmbildsläget döljer menyer, filterval och knappar. Aktiva filter syns i rubriken.","O = pelatut ottelut. Kuvakaappaustila piilottaa valikot, suodattimet ja painikkeet. Käytössä olevat suodattimet näkyvät otsikossa.")}</p>`;
 }
 function chip(p,o){return `<button class="chip ${o.sel?"sel":""} ${o.lock?"lock":""}" data-a="${o.act}" data-id="${esc(p.id)}" aria-pressed="${!!o.sel}" ${o.lock?"disabled":""}><b>${esc(p.nr)}</b><span>${esc(short(p.name))}</span></button>`}
+function conflictCards(){
+  const s=cur();
+  return S.conflicts.map((c,i)=>{
+    if(c.sid!==s.id||!s.tp)return "";
+    const m=s.matches.find(x=>x.id===c.mid);if(!m)return "";
+    const g=c.g,home=g.HomeTeam===s.tp.tid,opp=home?g.AwayTeamAbbrv:g.HomeTeamAbbrv;
+    const tpRes=c.nores?"":` (${home?g.HomeGoals:g.AwayGoals}–${home?g.AwayGoals:g.HomeGoals})`;
+    const mine=`${m.opp?T("mot ","vastaan ")+esc(m.opp):T("utan motståndare","ilman vastustajaa")}, ${fmtScore(score(m))}`;
+    const btn=(v,t,p)=>`<button class="btn small ${p?"primary":""}" data-a="cf" data-i="${i}" data-v="${v}">${t}</button>`;
+    return `<div class="card editor"><h2>${T("Välj vilken match som gäller","Valitse, mikä ottelu on oikea")}</h2>
+      <p style="margin:0 0 6px"><b style="text-transform:capitalize">${esc(fmtDate(normDate(g.GameDate),true))}</b>: ${T("tulospalvelu har en match mot","tulospalvelussa on ottelu vastaan")} <b>${esc(opp)}</b>${tpRes}.</p>
+      <p class="note" style="margin:0 0 10px">${T("Du har redan en egen match samma dag","Sinulla on jo oma ottelu samana päivänä")} (${mine}).</p>
+      <div class="rowbtns">${c.nores?btn("link",T("Samma match, koppla ihop","Sama ottelu, yhdistä"),1)+btn("both",T("Olika matcher","Eri ottelut"))
+        :btn("tp",T("Använd tulospalvelus","Käytä tulospalvelun"),1)+btn("mine",T("Behåll min","Pidä oma"))+btn("both",T("Olika matcher","Eri ottelut"))}</div>
+      <p class="note" style="margin:0">${c.nores?T("Koppla ihop: din match behåller resultat och spelare och knyts till matchen i schemat.","Yhdistä: ottelusi säilyttää tuloksen ja pelaajat ja liitetään otteluohjelman otteluun.")
+        :T("Använd tulospalvelus: din egen match tas bort. Behåll min: matchen från tulospalvelu hämtas inte.","Käytä tulospalvelun: oma ottelusi poistetaan. Pidä oma: tulospalvelun ottelua ei haeta.")}</p></div>`;
+  }).join("");
+}
 function viewMatches(){
   const s=cur();if(!s)return emptyState();
   if(S.mform)return viewMatchForm();
   const m=S.mid&&matchOf(S.mid);if(m)return viewMatch(m);
   if(S.link)return linkCard();
-  const tpDates=new Set(s.matches.filter(m=>m.gid).map(m=>m.date));
-  const list=sortedMatches().map(m=>{const [f,a]=score(m);
-    const dup=!m.gid&&tpDates.has(m.date);
-    return `<button class="mcard" data-a="m-open" data-id="${esc(m.id)}"><div><div class="d">${esc(fmtDate(m.date,true))}</div><small>${m.opp?"Mot "+esc(m.opp):"Motståndare ej angiven"} · ${m.players.length} spelare${m.gid?" · tulospalvelu":" · manuell"}${m.auto?" · kontrollera":""}</small>${dup?'<small style="color:var(--danger);font-weight:600">Möjlig dubblett av en hämtad match</small>':""}</div><div class="score">${f}–${a}</div></button>`}).join("");
-  const manual=s.tp?`<p style="margin:0 0 12px"><button class="btn" style="width:100%" data-a="m-new">+ Lägg till match manuellt</button></p>`
-    :`<p style="margin:0 0 12px"><button class="btn primary big" data-a="m-new">+ Ny match</button></p>`;
-  return `${tpCard()}${players.length||s.tp?manual:`<div class="card empty">Lägg först till spelare under Spelare.</div>`}
-  <div class="card"><label class="switch"><input type="checkbox" id="pm-toggle" ${s.pm?"checked":""}> Registrera +/- (valfritt)</label>
-  <p class="note" style="margin:6px 0 0">${s.pm?"När du lägger in ett mål eller insläppt mål väljer du också vilka som var på isen.":"Slå på om ni vill föra plus/minus. Allt annat fungerar som vanligt utan det."}</p></div>
-  ${list||`<div class="card empty">Inga matcher ännu. ${s.tp?"Tryck på Hämta matcher.":"Tryck på Ny match."}</div>`}`;
+  const list=sortedMatches().map(m=>{
+    const src=m.gid?(m.nores?T("schema, eget resultat","otteluohjelma, oma tulos"):"tulospalvelu"):MT()[mtype(m)][0].toLowerCase();
+    return `<button class="mcard" data-a="m-open" data-id="${esc(m.id)}"><div><div class="d">${esc(fmtDate(m.date,true))}</div><small>${m.opp?T("Mot ","Vastaan ")+esc(m.opp):T("Motståndare ej angiven","Vastustajaa ei annettu")} · ${m.players.length} ${T("spelare","pelaajaa")} · ${src}</small></div><div class="score">${fmtScore(score(m))}</div></button>`}).join("");
+  const manual=s.tp?`<p style="margin:0 0 12px"><button class="btn" style="width:100%" data-a="m-new">${T("+ Träningsmatch eller turnering","+ Harjoitusottelu tai turnaus")}</button></p>`
+    :`<p style="margin:0 0 12px"><button class="btn primary big" data-a="m-new">${T("+ Ny match","+ Uusi ottelu")}</button></p>`;
+  const pmNote=s.pm?(s.tp?T("I serier som för +/- hämtas det automatiskt. Annars trycker du på På isen vid ett mål för att fylla i det själv.","Sarjoissa, joissa +/- tilastoidaan, se haetaan automaattisesti. Muuten paina maalin kohdalla Jäällä ja täytä itse."):T("När du lägger in ett mål eller insläppt mål väljer du också vilka som var på isen.","Kun lisäät maalin tai päästetyn maalin, valitset myös ketkä olivat jäällä."))
+    :T("Slå på för att visa +/-. Finns det i tulospalvelu hämtas det automatiskt, annars kan ni fylla i det själva.","Ota käyttöön näyttääksesi +/-. Jos se löytyy tulospalvelusta, se haetaan automaattisesti, muuten voitte täyttää sen itse.");
+  return `${conflictCards()}${tpCard()}${players.length||s.tp?manual:`<div class="card empty">${T("Lägg först till spelare under Spelare.","Lisää ensin pelaajat kohdassa Pelaajat.")}</div>`}
+  <div class="card"><label class="switch"><input type="checkbox" id="pm-toggle" ${s.pm?"checked":""}> ${T("Visa och registrera +/-","Näytä ja kirjaa +/-")}</label>
+  <p class="note" style="margin:6px 0 0">${pmNote}</p></div>
+  ${list||`<div class="card empty">${T("Inga matcher ännu.","Ei otteluita vielä.")} ${s.tp?T("Tryck på Hämta matcher.","Paina Hae ottelut."):T("Tryck på Ny match.","Paina Uusi ottelu.")}</div>`}`;
 }
 function viewMatchForm(){
-  const f=S.mform,s=cur();
-  const opps=uniq(s.matches.map(m=>m.opp));
-  const last=sortedMatches().find(m=>m.id!==f.id&&m.players.length);
-  return `<button class="link" data-a="mf-cancel">← Avbryt</button>
-  <div class="card"><h2>${f.id?"Ändra match":"Ny match"}</h2><div class="fields">
-    <label>Datum<input class="in" type="date" id="mf-date" value="${esc(f.date)}"></label>
-    <label>Motståndare<input class="in" type="text" id="mf-opp" list="opps" value="${esc(f.opp)}" placeholder="Valfritt" autocomplete="off"></label></div>
-    <datalist id="opps">${opps.map(o=>`<option value="${esc(o)}">`).join("")}</datalist></div>
-  <div class="card"><div class="cardhead"><h2>Spelare i matchen</h2><span class="count">${f.sel.length} valda</span></div>
-    <p class="note" style="margin:0 0 10px">Tryck på alla som spelade.</p>
-    <div class="rowbtns"><button class="btn small" data-a="mf-all">Välj alla</button><button class="btn small" data-a="mf-none">Rensa</button>${last?`<button class="btn small" data-a="mf-last" data-id="${esc(last.id)}">Samma som förra matchen</button>`:""}</div>
-    <div class="grid">${players.map(p=>chip(p,{sel:f.sel.includes(p.id),act:"mf-tog"})).join("")}</div></div>
-  <div class="savebar"><button class="btn primary" data-a="mf-save" ${f.sel.length?"":"disabled"}>${f.id?"Spara ändringar":"Spara och lägg in statistik"}</button></div>`;
+  const f=S.mform,s=cur(),m=f.id?matchOf(f.id):null,fromTp=!!(m&&m.gid);
+  const opps=uniq(s.matches.map(x=>x.opp));
+  const last=sortedMatches().find(x=>x.id!==f.id&&x.players.length);
+  const pick=players.filter(p=>!p.hide||f.sel.includes(p.id));
+  return `<button class="link" data-a="mf-cancel">← ${T("Avbryt","Peruuta")}</button>
+  <div class="card"><h2>${f.id?T("Ändra match","Muokkaa ottelua"):T("Ny match","Uusi ottelu")}</h2>
+    ${fromTp?`<p style="margin:0 0 10px"><b style="text-transform:capitalize">${esc(fmtDate(f.date))}</b><br>${T("Mot","Vastaan")} ${esc(f.opp)}</p><p class="note" style="margin:0 0 10px">${T("Datum och motståndare kommer från tulospalvelu.","Päivämäärä ja vastustaja tulevat tulospalvelusta.")}</p>`
+    :`<div class="fields">
+      <label>${T("Datum","Päivämäärä")}<input class="in" type="date" id="mf-date" value="${esc(f.date)}"></label>
+      <label>${T("Motståndare","Vastustaja")}<input class="in" type="text" id="mf-opp" list="opps" value="${esc(f.opp)}" placeholder="${T("Valfritt","Valinnainen")}" autocomplete="off"></label>
+      <label class="wide">${T("Typ","Tyyppi")}<select class="in" id="mf-type">${["tr","cup"].map(t=>`<option value="${t}" ${f.type===t?"selected":""}>${MT()[t][0]}</option>`).join("")}</select></label></div>
+    <datalist id="opps">${opps.map(o=>`<option value="${esc(o)}">`).join("")}</datalist>`}
+    <h3 class="sec">${T("Slutresultat","Lopputulos")}</h3>
+    <p class="note" style="margin:0 0 8px">${T("Fyll i om ni inte lägger in målen ett och ett. Läggs mål in räknas resultatet från dem.","Täytä, jos ette kirjaa maaleja yksitellen. Jos maalit kirjataan, tulos lasketaan niistä.")}</p>
+    <div class="fields"><label>${T("Egna mål","Omat maalit")}<input class="in" id="mf-rf" type="number" inputmode="numeric" min="0" max="99" value="${esc(f.rf)}"></label>
+    <label>${T("Insläppta","Päästetyt")}<input class="in" id="mf-ra" type="number" inputmode="numeric" min="0" max="99" value="${esc(f.ra)}"></label></div></div>
+  <div class="card"><div class="cardhead"><h2>${T("Spelare i matchen","Ottelun pelaajat")}</h2><span class="count">${f.sel.length} ${T("valda","valittu")}</span></div>
+    <p class="note" style="margin:0 0 10px">${T("Tryck på alla som spelade.","Napauta kaikkia, jotka pelasivat.")}</p>
+    <div class="rowbtns"><button class="btn small" data-a="mf-all">${T("Välj alla","Valitse kaikki")}</button><button class="btn small" data-a="mf-none">${T("Rensa","Tyhjennä")}</button>${last?`<button class="btn small" data-a="mf-last" data-id="${esc(last.id)}">${T("Samma som förra matchen","Sama kuin edellisessä")}</button>`:""}</div>
+    <div class="grid">${pick.map(p=>chip(p,{sel:f.sel.includes(p.id),act:"mf-tog"})).join("")}</div></div>
+  <div class="savebar"><button class="btn primary" data-a="mf-save">${f.id?T("Spara ändringar","Tallenna muutokset"):T("Spara","Tallenna")}</button></div>`;
 }
 function viewMatch(m){
-  const s=cur(),[f,a]=score(m);
+  const s=cur(),lk=locked(m);
   let gf=0,gaa=0;
   const evs=evOf(m).map(e=>{
     if(e.t==="g")gf++;else if(e.t==="ga")gaa++;
     const rs=e.t==="u"?"":`<span class="rs">${gf}–${gaa}</span>`;
-    const ice=(s.pm||e.x.ice&&e.x.ice.length)&&e.t!=="u"&&e.x.ice.length?`<small>På isen: ${esc(nrs(e.x.ice))}</small>`:"";
+    const ice=e.t!=="u"&&e.x.ice.length?`<small>${T("På isen","Jäällä")}: ${esc(nrs(e.x.ice))}</small>`:"";
     let txt;
-    if(e.t==="g")txt=`<span class="tag">MÅL</span>${rs}<b style="display:block">${esc(plabel(e.x.scorer))}</b>${(e.x.a1||e.x.a2)?`<small>Assist: ${[e.x.a1,e.x.a2].filter(Boolean).map(x=>esc(plabel(x))).join(", ")}</small>`:""}${ice}`;
-    else if(e.t==="ga")txt=`<span class="tag ga">INSLÄPPT</span>${rs}<b style="display:block">Insläppt mål</b>${ice}`;
-    else txt=`<span class="tag u">UTV</span><b style="display:block">${esc(plabel(e.x.pid))}</b><small>${esc(e.x.min)} min</small>`;
+    if(e.t==="g")txt=`<span class="tag">${T("MÅL","MAALI")}</span>${rs}<b style="display:block">${esc(plabel(e.x.scorer))}</b>${(e.x.a1||e.x.a2)?`<small>${T("Assist","Syöttö")}: ${[e.x.a1,e.x.a2].filter(Boolean).map(x=>esc(plabel(x))).join(", ")}</small>`:""}${ice}`;
+    else if(e.t==="ga")txt=`<span class="tag ga">${T("INSLÄPPT","PÄÄSTETTY")}</span>${rs}<b style="display:block">${T("Insläppt mål","Päästetty maali")}</b>${ice}`;
+    else txt=`<span class="tag u">${T("UTV","JÄÄHY")}</span><b style="display:block">${esc(plabel(e.x.pid))}</b><small>${esc(e.x.min)} min</small>`;
     const key=e.t+":"+e.x.id;
-    return `<div class="ev"><div style="min-width:0">${txt}</div><div class="evb"><button class="btn small" data-a="ev-edit" data-t="${e.t}" data-id="${esc(e.x.id)}">Ändra</button><button class="btn small danger" data-a="del" data-t="${e.t}" data-id="${esc(e.x.id)}">${S.confirm===key?"Säker?":"Ta bort"}</button></div></div>`;
+    const btns=lk?(s.pm&&e.t!=="u"?`<button class="btn small" data-a="ev-ice-edit" data-t="${e.t}" data-id="${esc(e.x.id)}">${T("På isen","Jäällä")}</button>`:"")
+      :`<button class="btn small" data-a="ev-edit" data-t="${e.t}" data-id="${esc(e.x.id)}">${T("Ändra","Muokkaa")}</button><button class="btn small danger" data-a="del" data-t="${e.t}" data-id="${esc(e.x.id)}">${S.confirm===key?T("Säker?","Varma?"):T("Ta bort","Poista")}</button>`;
+    return `<div class="ev"><div style="min-width:0">${txt}</div><div class="evb">${btns}</div></div>`;
   }).join("");
-  const acts=`<div class="acts"><button class="goal" data-a="ev-new" data-t="g">+ Mål</button><button data-a="ev-new" data-t="ga">+ Insläppt</button><button data-a="ev-new" data-t="u">+ Utvisning</button></div>`;
-  return `<button class="link" data-a="m-back">← Alla matcher</button>
-  <div class="card"><div class="mh-top"><div><h2 style="margin:0;text-transform:capitalize">${esc(fmtDate(m.date))}</h2><div class="sub">${m.opp?"Mot "+esc(m.opp):"Motståndare ej angiven"}</div></div><div class="score">${f}–${a}</div></div>
-    <p class="note">${m.players.length} spelare: ${esc(nrs(m.players))||"inga valda"}</p>
-    ${m.auto?`<p class="warn">Spelarna i den här matchen är gissade från gammal statistik. Tryck på Ändra match och kontrollera.</p>`:""}
-    ${m.gid?`<p class="note">Hämtad från tulospalvelu. Om du ändrar här skrivs det över när du väljer "Hämta om alla matcher" under Data. <a href="${TP_SITE}game?season=${esc(s.tp?s.tp.season:"")}&gameid=${esc(m.gid)}&lang=fi" target="_blank" rel="noopener">Öppna matchen ↗</a></p>`:""}
-    <button class="btn small" data-a="mf-edit">Ändra match och spelare</button></div>
-  ${S.ev?editor(m):acts}
-  ${evs?`<h3 class="sec">Händelser</h3>${evs}`:`<div class="card empty">Inga mål eller utvisningar ännu.</div>`}
-  <p style="margin:20px 0 0"><button class="btn danger" data-a="m-del">${S.confirm==="m:"+m.id?"Säker? Allt i matchen tas bort":"Ta bort matchen"}</button></p>`;
+  const acts=`<div class="acts"><button class="goal" data-a="ev-new" data-t="g">${T("+ Mål","+ Maali")}</button><button data-a="ev-new" data-t="ga">${T("+ Insläppt","+ Päästetty")}</button><button data-a="ev-new" data-t="u">${T("+ Utvisning","+ Jäähy")}</button></div>`;
+  const gid=m.gid||m.xgid,link=gid&&s.tp?` <a href="${TP_SITE}game?season=${esc(s.tp.season)}&gameid=${esc(gid)}&lang=fi" target="_blank" rel="noopener">${T("Öppna i tulospalvelu ↗","Avaa tulospalvelussa ↗")}</a>`:"";
+  const info=lk?T("Hämtad från tulospalvelu och uppdateras automatiskt. Mål, assist, utvisningar och spelare kan inte ändras här.","Haettu tulospalvelusta ja päivittyy automaattisesti. Maaleja, syöttöjä, jäähyjä ja pelaajia ei voi muuttaa täällä.")+(s.pm?" "+T("Du kan fylla i +/- med På isen.","Voit täyttää +/- painikkeella Jäällä."):"")
+    :m.gid?T("Matchen finns i tulospalvelus schema, men serien visar inga resultat. Fyll i resultat och spelare själv.","Ottelu on tulospalvelun otteluohjelmassa, mutta sarja ei näytä tuloksia. Täytä tulos ja pelaajat itse.")
+    :m.xgid?T("Bortkopplad från tulospalvelu. Den uppdateras inte längre.","Irrotettu tulospalvelusta. Ottelu ei enää päivity."):"";
+  const foot=lk?`<button class="btn" data-a="m-detach">${S.confirm==="d:"+m.id?T("Säker? Matchen blir manuell och uppdateras inte mer","Varma? Ottelusta tulee käsin muokattava, eikä se enää päivity"):T("Koppla loss matchen","Irrota ottelu")}</button>`:"";
+  const del=m.gid?`<button class="btn danger" data-a="m-del">${S.confirm==="m:"+m.id?T("Säker? Den hämtas inte igen","Varma? Sitä ei haeta uudelleen"):T("Ta bort och hämta aldrig igen","Poista, älä hae uudelleen")}</button>`
+    :`<button class="btn danger" data-a="m-del">${S.confirm==="m:"+m.id?T("Säker? Allt i matchen tas bort","Varma? Kaikki ottelun tiedot poistetaan"):T("Ta bort matchen","Poista ottelu")}</button>`;
+  return `<button class="link" data-a="m-back">← ${T("Alla matcher","Kaikki ottelut")}</button>
+  <div class="card"><div class="mh-top"><div><h2 style="margin:0;text-transform:capitalize">${esc(fmtDate(m.date))}</h2><div class="sub">${m.opp?T("Mot ","Vastaan ")+esc(m.opp):T("Motståndare ej angiven","Vastustajaa ei annettu")} · ${MT()[mtype(m)][0]}</div></div><div class="score">${fmtScore(score(m))}</div></div>
+    <p class="note">${m.players.length} ${T("spelare","pelaajaa")}: ${esc(nrs(m.players))||T("inga valda","ei valittu")}</p>
+    ${info||link?`<p class="note">${info}${link}</p>`:""}
+    ${lk?"":`<button class="btn small" data-a="mf-edit">${T("Ändra resultat och spelare","Muokkaa tulosta ja pelaajia")}</button>`}</div>
+  ${lk?(S.ev?editor(m):""):(S.ev?editor(m):acts)}
+  ${evs?`<h3 class="sec">${T("Händelser","Tapahtumat")}</h3>${evs}`:`<div class="card empty">${T("Inga mål eller utvisningar inlagda.","Ei kirjattuja maaleja tai jäähyjä.")}</div>`}
+  <p style="margin:20px 0 0;display:grid;gap:8px">${foot}${del}</p>`;
 }
 function prevIce(m){
   const e=S.ev,s=cur();
   const list=[...s.goals,...s.ga].filter(x=>x.mid===m.id&&x.id!==e.id&&x.ice&&x.ice.length).sort((a,b)=>(b.ts||0)-(a.ts||0));
   return list[0]?list[0].ice:null;
 }
-function iceBlock(m,part,sign,locked){
-  const e=S.ev,sel=uniq([...locked,...e.ice]),prev=prevIce(m);
-  return `<h3 class="sec">På isen (${sign}1) <span class="count">${sel.length} valda</span></h3>
-   ${sign==="+"?'<p class="note" style="margin:0 0 8px">Målskytt och assist räknas med automatiskt.</p>':""}
-   <div class="rowbtns">${prev?'<button class="btn small" data-a="ice-prev">Samma som förra</button>':""}<button class="btn small" data-a="ice-none">Rensa</button></div>
-   <div class="grid">${part.map(p=>chip(p,{sel:sel.includes(p.id),lock:locked.includes(p.id),act:"ev-ice"})).join("")}</div>`;
+function iceBlock(m,part,sign,lockedIds){
+  const e=S.ev,sel=uniq([...lockedIds,...e.ice]),prev=prevIce(m);
+  return `<h3 class="sec">${T("På isen","Jäällä")} (${sign}1) <span class="count">${sel.length} ${T("valda","valittu")}</span></h3>
+   ${sign==="+"?`<p class="note" style="margin:0 0 8px">${T("Målskytt och assist räknas med automatiskt.","Maalintekijä ja syöttäjät lasketaan mukaan automaattisesti.")}</p>`:""}
+   <div class="rowbtns">${prev?`<button class="btn small" data-a="ice-prev">${T("Samma som förra","Sama kuin edellinen")}</button>`:""}<button class="btn small" data-a="ice-none">${T("Rensa","Tyhjennä")}</button></div>
+   <div class="grid">${part.map(p=>chip(p,{sel:sel.includes(p.id),lock:lockedIds.includes(p.id),act:"ev-ice"})).join("")}</div>`;
 }
 function editor(m){
   const e=S.ev,s=cur(),part=m.players.map(pById).filter(Boolean).sort(nrCmp);
-  const cancel=`<button class="btn" data-a="ev-cancel">Avbryt</button>`;
-  if(!part.length)return `<div class="card"><p>Välj först vilka spelare som var med i matchen.</p><p style="display:flex;gap:8px"><button class="btn primary" data-a="mf-edit">Välj spelare</button>${cancel}</p></div>`;
-  let inner,ok;
-  if(e.t==="g"){
-    const names=["Målskytt","Assist 1","Assist 2"];
-    const slots=names.map((n,i)=>{const id=e.pick[i];return `<div class="slot ${e.slot===i?"active":""}" data-a="slot" data-i="${i}"><div><small>${n}${i?" (valfri)":""}</small><b>${id?esc(plabel(id)):"Tryck på ett nummer nedan"}</b></div>${id?`<button class="x" data-a="clear" data-i="${i}" aria-label="Rensa ${n}">×</button>`:""}</div>`}).join("");
+  const cancel=`<button class="btn" data-a="ev-cancel">${T("Avbryt","Peruuta")}</button>`;
+  if(!part.length)return `<div class="card"><p>${T("Välj först vilka spelare som var med i matchen.","Valitse ensin, ketkä pelasivat ottelussa.")}</p><p style="display:flex;gap:8px">${locked(m)?"":`<button class="btn primary" data-a="mf-edit">${T("Välj spelare","Valitse pelaajat")}</button>`}${cancel}</p></div>`;
+  let inner,ok,title;
+  if(e.iceOnly){
+    inner=iceBlock(m,part,e.t==="g"?"+":"−",e.t==="g"?e.pick.filter(Boolean):[]);ok=true;title=T("På isen","Jäällä");
+  }else if(e.t==="g"){
+    const names=[T("Målskytt","Maalintekijä"),T("Assist 1","Syöttö 1"),T("Assist 2","Syöttö 2")];
+    const slots=names.map((n,i)=>{const id=e.pick[i];return `<div class="slot ${e.slot===i?"active":""}" data-a="slot" data-i="${i}"><div><small>${n}${i?" ("+T("valfri","valinnainen")+")":""}</small><b>${id?esc(plabel(id)):T("Tryck på ett nummer nedan","Napauta numeroa alla")}</b></div>${id?`<button class="x" data-a="clear" data-i="${i}" aria-label="${T("Rensa","Tyhjennä")} ${n}">×</button>`:""}</div>`}).join("");
     inner=`<div class="slots">${slots}</div><div class="grid">${part.map(p=>chip(p,{sel:e.pick.includes(p.id),act:"ev-pick"})).join("")}</div>${s.pm?iceBlock(m,part,"+",e.pick.filter(Boolean)):""}`;
-    ok=!!e.pick[0];
+    ok=!!e.pick[0];title=T("Mål","Maali");
   }else if(e.t==="ga"){
-    inner=s.pm?iceBlock(m,part,"−",[]):`<p class="note" style="margin:0">Räknas in i matchresultatet. Slå på +/- under Matcher om ni vill registrera vilka som var på isen.</p>`;
-    ok=true;
+    inner=s.pm?iceBlock(m,part,"−",[]):`<p class="note" style="margin:0">${T("Räknas in i matchresultatet. Slå på +/- under Matcher om ni vill registrera vilka som var på isen.","Lasketaan ottelun tulokseen. Ota +/- käyttöön kohdassa Ottelut, jos haluatte kirjata ketkä olivat jäällä.")}</p>`;
+    ok=true;title=T("Insläppt mål","Päästetty maali");
   }else{
     inner=`<div class="grid">${part.map(p=>chip(p,{sel:e.pid===p.id,act:"ev-pid"})).join("")}</div>
       <div class="mins">${[2,4,5,10,20].map(v=>`<button class="chip ${Number(e.min)===v?"sel":""}" data-a="min" data-v="${v}" aria-pressed="${Number(e.min)===v}"><b>${v}</b></button>`).join("")}
-      <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:14px">annat <input class="in" id="ev-min" type="number" inputmode="numeric" min="1" max="60" value="${esc(e.min)}" style="width:76px"></label>min</div>`;
-    ok=!!e.pid&&Number(e.min)>0;
+      <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:14px">${T("annat","muu")} <input class="in" id="ev-min" type="number" inputmode="numeric" min="1" max="60" value="${esc(e.min)}" style="width:76px"></label>min</div>`;
+    ok=!!e.pid&&Number(e.min)>0;title=T("Utvisning","Jäähy");
   }
-  const title={g:"Mål",ga:"Insläppt mål",u:"Utvisning"}[e.t];
-  return `<div class="card editor"><h2>${e.id?"Ändra "+title.toLowerCase():title}</h2>${inner}
-   <div class="savebar" style="display:grid;grid-template-columns:2fr 1fr;gap:8px"><button class="btn primary" data-a="ev-save" ${ok?"":"disabled"}>Spara</button>${cancel}</div></div>`;
+  return `<div class="card editor"><h2>${e.id&&!e.iceOnly?T("Ändra: ","Muokkaa: ")+title.toLowerCase():title}</h2>${inner}
+   <div class="savebar" style="display:grid;grid-template-columns:2fr 1fr;gap:8px"><button class="btn primary" data-a="ev-save" ${ok?"":"disabled"}>${T("Spara","Tallenna")}</button>${cancel}</div></div>`;
 }
 function viewPlayers(){
   const s=cur();if(!s)return emptyState();
-  const stats=new Map(computeStats().map(r=>[r.p.id,r]));
-  const add=`<div class="card"><h2>Lägg till spelare</h2><div class="fields">
-    <label>Nummer<input class="in" id="n-nr" type="number" inputmode="numeric" min="0" max="99"></label>
-    <label>Position<select class="in" id="n-pos"><option value="UP">Utespelare</option><option value="MV">Målvakt</option></select></label>
-    <label class="wide">Namn<input class="in" id="n-name" type="text" autocomplete="off" placeholder="Förnamn Efternamn"></label></div>
-    <p style="margin:12px 0 0"><button class="btn primary" style="width:100%" data-a="padd">Lägg till</button></p></div>`;
-  const list=players.map(p=>{
-    if(S.edit===p.id)return `<div class="ev"><div class="fields" style="flex:1"><label>Nr<input class="in" id="e-nr" type="number" inputmode="numeric" value="${esc(p.nr)}"></label>
-      <label>Pos<select class="in" id="e-pos"><option value="UP" ${p.pos!=="MV"?"selected":""}>Utespelare</option><option value="MV" ${p.pos==="MV"?"selected":""}>Målvakt</option></select></label>
-      <label class="wide">Namn<input class="in" id="e-name" value="${esc(p.name)}"></label>
-      <div class="wide" style="display:flex;gap:8px"><button class="btn primary small" data-a="psave" data-id="${esc(p.id)}">Spara</button><button class="btn small" data-a="pcancel">Avbryt</button></div></div></div>`;
+  const linked=!!s.tp,stats=new Map(computeStats().map(r=>[r.p.id,r]));
+  const add=(linked?`<p class="note" style="margin:0 0 12px">${T("Truppen hämtas från tulospalvelu. Du kan ändra hur namnet visas och dölja spelare från listorna. Dolda spelares statistik finns kvar. Spelare som saknas i tulospalvelu kan du lägga till själv.","Joukkue haetaan tulospalvelusta. Voit muuttaa nimen näyttötapaa ja piilottaa pelaajia listoilta. Piilotettujen pelaajien tilastot säilyvät. Tulospalvelusta puuttuvat pelaajat voit lisätä itse.")}</p>`:"")
+    +`<div class="card"><h2>${T("Lägg till spelare","Lisää pelaaja")}</h2><div class="fields">
+    <label>${T("Nummer","Numero")}<input class="in" id="n-nr" type="number" inputmode="numeric" min="0" max="99"></label>
+    <label>${T("Position","Pelipaikka")}<select class="in" id="n-pos"><option value="UP">${T("Utespelare","Kenttäpelaaja")}</option><option value="MV">${T("Målvakt","Maalivahti")}</option></select></label>
+    <label class="wide">${T("Namn","Nimi")}<input class="in" id="n-name" type="text" autocomplete="off" placeholder="${T("Förnamn Efternamn","Etunimi Sukunimi")}"></label></div>
+    <p style="margin:12px 0 0"><button class="btn primary" style="width:100%" data-a="padd">${T("Lägg till","Lisää")}</button></p></div>`;
+  const row=p=>{
+    if(S.edit===p.id)return `<div class="ev"><div class="fields" style="flex:1">${p.tpid?"":`<label>Nr<input class="in" id="e-nr" type="number" inputmode="numeric" value="${esc(p.nr)}"></label>`}
+      <label>${T("Pos","Paikka")}<select class="in" id="e-pos"><option value="UP" ${p.pos!=="MV"?"selected":""}>${T("Utespelare","Kenttäpelaaja")}</option><option value="MV" ${p.pos==="MV"?"selected":""}>${T("Målvakt","Maalivahti")}</option></select></label>
+      <label class="wide">${T("Namn","Nimi")}<input class="in" id="e-name" value="${esc(p.name)}"></label>
+      <div class="wide" style="display:flex;gap:8px"><button class="btn primary small" data-a="psave" data-id="${esc(p.id)}">${T("Spara","Tallenna")}</button><button class="btn small" data-a="pcancel">${T("Avbryt","Peruuta")}</button></div></div></div>`;
     const r=stats.get(p.id);
-    return `<div class="ev"><div><b style="font:700 22px var(--font-d);display:inline-block;min-width:34px">${esc(p.nr)}</b><b>${esc(p.name)}</b> <small style="display:inline">${p.pos==="MV"?"Målvakt":""}</small><small>${r.gp} matcher · ${r.g} mål · ${r.a} assist · ${r.u} utv.min${s.pm?" · "+fmtPM(r.pm):""}</small></div>
-      <div class="evb"><button class="btn small" data-a="pedit" data-id="${esc(p.id)}">Ändra</button><button class="btn small danger" data-a="pdel" data-id="${esc(p.id)}">${S.confirm==="p:"+p.id?"Säker?":"Ta bort"}</button></div></div>`;
-  }).join("");
-  return add+(list||'<div class="card empty">Inga spelare ännu.</div>');
+    const act=p.tpid?`<button class="btn small" data-a="phide" data-id="${esc(p.id)}">${p.hide?T("Visa","Näytä"):T("Dölj","Piilota")}</button>`
+      :`<button class="btn small danger" data-a="pdel" data-id="${esc(p.id)}">${S.confirm==="p:"+p.id?T("Säker?","Varma?"):T("Ta bort","Poista")}</button>`;
+    return `<div class="ev"><div><b style="font:700 22px var(--font-d);display:inline-block;min-width:34px">${esc(p.nr)}</b><b>${esc(p.name)}</b> <small style="display:inline">${p.pos==="MV"?T("Målvakt","Maalivahti"):""}</small><small>${r.gp} ${T("matcher","ottelua")} · ${r.g} ${T("mål","maalia")} · ${r.a} ${T("assist","syöttöä")} · ${r.u} ${T("utv.min","jäähymin")}${s.pm?" · "+fmtPM(r.pm):""}</small></div>
+      <div class="evb"><button class="btn small" data-a="pedit" data-id="${esc(p.id)}">${T("Ändra","Muokkaa")}</button>${act}</div></div>`;
+  };
+  const shown=players.filter(p=>!p.hide),hidden=players.filter(p=>p.hide);
+  return add+(shown.map(row).join("")||`<div class="card empty">${linked?T("Inga spelare ännu. Tryck på Hämta matcher under Matcher.","Ei pelaajia vielä. Paina Hae ottelut kohdassa Ottelut."):T("Inga spelare ännu.","Ei pelaajia vielä.")}</div>`)
+    +(hidden.length?`<h3 class="sec">${T("Dolda spelare","Piilotetut pelaajat")} (${hidden.length})</h3>${hidden.map(row).join("")}`:"");
 }
 function seasonForm(first){
   const s=cur();
-  return `<div class="card"><h2>${first?"Skapa ett lag":"Nytt lag eller ny säsong"}</h2><div class="fields">
-    <label class="wide">Lag<input class="in" id="ns-lag" placeholder="t.ex. MIF"></label>
-    <label class="wide">Serie<input class="in" id="ns-serie" placeholder="t.ex. U13 Valkoinen, lohko 3b"></label>
-    <label class="wide">Säsong<input class="in" id="ns-sas" placeholder="t.ex. 2026–2027"></label></div>
-    ${!first&&players.length?`<p style="margin:10px 0 0"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="ns-copy" checked> Kopiera spelarlistan från ${esc(s?s.lag:"")} ${esc(s?s.sasong:"")}</label></p>`:""}
-    <p style="margin:12px 0 0"><button class="btn primary" style="width:100%" data-a="newseason">Skapa</button></p></div>`;
+  return `<div class="card"><h2>${T("Lag utan tulospalvelu","Joukkue ilman tulospalvelua")}</h2>
+    <p class="note" style="margin:0 0 10px">${T("För lag som inte finns i tulospalvelu. Allt läggs in för hand.","Joukkueille, joita ei ole tulospalvelussa. Kaikki kirjataan käsin.")}</p><div class="fields">
+    <label class="wide">${T("Lag","Joukkue")}<input class="in" id="ns-lag" placeholder="${T("t.ex. MIF","esim. MIF")}"></label>
+    <label class="wide">${T("Serie","Sarja")}<input class="in" id="ns-serie"></label>
+    <label class="wide">${T("Säsong","Kausi")}<input class="in" id="ns-sas" placeholder="2026–2027"></label></div>
+    ${!first&&players.length?`<p style="margin:10px 0 0"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="ns-copy" checked> ${T("Kopiera spelarlistan från","Kopioi pelaajalista joukkueesta")} ${esc(s?s.lag:"")} ${esc(s?s.sasong:"")}</label></p>`:""}
+    <p style="margin:12px 0 0"><button class="btn" style="width:100%" data-a="newseason">${T("Skapa","Luo")}</button></p></div>`;
 }
 function importCard(){
   const im=S.imp;
-  let body=`<p class="note" style="margin:0 0 10px">Välj en CSV-fil som du har sparat från appen eller fått av någon. Allt som finns i appen just nu ersätts.</p>
-    <label class="btn" style="display:block;text-align:center">Välj CSV-fil<input type="file" id="imp-file" accept=".csv,text/csv,text/plain,.txt" style="display:none"></label>`;
+  let body=`<p class="note" style="margin:0 0 10px">${T("Välj en CSV-fil som du har sparat från appen eller fått av någon. Allt som finns i appen just nu ersätts.","Valitse sovelluksesta tallennettu tai saamasi CSV-tiedosto. Kaikki sovelluksen nykyiset tiedot korvataan.")}</p>
+    <label class="btn" style="display:block;text-align:center">${T("Välj CSV-fil","Valitse CSV-tiedosto")}<input type="file" id="imp-file" accept=".csv,text/csv,text/plain,.txt" style="display:none"></label>`;
   if(im){
-    body+=im.error?`<p class="warn">${esc(im.error)}</p>`:`<div style="margin-top:12px"><b>${esc(im.name)}</b><br>${im.counts.seasons} säsong(er), ${im.counts.players} spelare, ${im.counts.matches} matcher, ${im.counts.goals} mål, ${im.counts.pens} utvisningar.
-      ${im.warnings.length?`<p class="warn">${im.warnings.length} rad(er) hoppades över eller ändrades:<br>${im.warnings.slice(0,6).map(esc).join("<br>")}${im.warnings.length>6?"<br>…":""}</p>`:""}
-      <p style="display:flex;gap:8px;margin:12px 0 0"><button class="btn primary" data-a="imp-do">${S.confirm==="imp"?"Säker? Tryck igen":"Ersätt all data"}</button><button class="btn" data-a="imp-cancel">Avbryt</button></p></div>`;
+    body+=im.error?`<p class="warn">${esc(im.error)}</p>`:`<div style="margin-top:12px"><b>${esc(im.name)}</b><br>${im.counts.seasons} ${T("säsong(er)","kautta")}, ${im.counts.players} ${T("spelare","pelaajaa")}, ${im.counts.matches} ${T("matcher","ottelua")}, ${im.counts.goals} ${T("mål","maalia")}, ${im.counts.pens} ${T("utvisningar","jäähyä")}.
+      ${im.warnings.length?`<p class="warn">${im.warnings.length} ${T("rad(er) hoppades över","riviä ohitettiin")}:<br>${im.warnings.slice(0,6).map(esc).join("<br>")}${im.warnings.length>6?"<br>…":""}</p>`:""}
+      <p style="display:flex;gap:8px;margin:12px 0 0"><button class="btn primary" data-a="imp-do">${S.confirm==="imp"?T("Säker? Tryck igen","Varma? Paina uudelleen"):T("Ersätt all data","Korvaa kaikki tiedot")}</button><button class="btn" data-a="imp-cancel">${T("Avbryt","Peruuta")}</button></p></div>`;
   }
-  return `<div class="card"><h2>Importera</h2>${body}</div>`;
+  return `<div class="card"><h2>${T("Importera","Tuo tiedosto")}</h2>${body}</div>`;
 }
-function emptyState(){
-  if(S.link)return linkCard();
-  return `<div class="card"><h2>Hämta från tulospalvelu</h2><p class="note" style="margin:0 0 10px">Välj laget i tulospalvelu.leijonat.fi. Spelare och matcher hämtas automatiskt.</p><button class="btn primary" style="width:100%" data-a="lk-new">Välj lag i tulospalvelu</button></div>`+seasonForm(true)+importCard();
-}
+function tpNewCard(){return `<div class="card"><h2>${T("Hämta från tulospalvelu","Hae tulospalvelusta")}</h2><p class="note" style="margin:0 0 10px">${T("Välj laget i tulospalvelu.leijonat.fi. Spelare och matcher hämtas automatiskt.","Valitse joukkue tulospalvelu.leijonat.fi-palvelusta. Pelaajat ja ottelut haetaan automaattisesti.")}</p><button class="btn primary" style="width:100%" data-a="lk-new">${T("Välj lag i tulospalvelu","Valitse joukkue tulospalvelusta")}</button></div>`}
+function emptyState(){if(S.link)return linkCard();return tpNewCard()+seasonForm(true)+importCard()}
 function proxyCard(){
-  return `<div class="card"><h2>Anslutning</h2>
-    <p class="note" style="margin:0 0 10px">Tulospalvelu släpper inte in anrop direkt från en app i webbläsaren. Därför går anropen via en liten proxy. Lämna fältet tomt om appen körs via den medföljande servern.</p>
-    <div class="fields"><label class="wide">Proxyadress<input class="in" id="px" type="url" inputmode="url" placeholder="https://…workers.dev/" value="${esc(LS.get("proxy",""))}" autocomplete="off"></label></div>
-    <p style="display:flex;gap:8px;margin:12px 0 0"><button class="btn primary small" data-a="px-save">Spara och testa</button></p>
-    <p class="note">Används nu: ${esc(tpBase())}</p></div>`;
+  return `<div class="card"><h2>${T("Anslutning","Yhteys")}</h2>
+    <p class="note" style="margin:0 0 10px">${T("Anropen till tulospalvelu går via en liten proxy. Lämna fältet tomt för att använda standardadressen.","Kyselyt tulospalveluun kulkevat pienen välityspalvelimen kautta. Jätä kenttä tyhjäksi käyttääksesi oletusosoitetta.")}</p>
+    <div class="fields"><label class="wide">${T("Proxyadress","Välityspalvelimen osoite")}<input class="in" id="px" type="url" inputmode="url" placeholder="https://…workers.dev/" value="${esc(LS.get("proxy",""))}" autocomplete="off"></label></div>
+    <p style="display:flex;gap:8px;margin:12px 0 0"><button class="btn small" data-a="px-save">${T("Spara och testa","Tallenna ja testaa")}</button></p>
+    <p class="note">${T("Används nu","Käytössä nyt")}: ${esc(tpBase())}</p></div>`;
 }
 function tpDataCard(){
   const s=cur();if(!s)return "";
-  if(!s.tp)return `<div class="card"><h2>Tulospalvelu</h2><p class="note" style="margin:0 0 10px">Den här säsongen är inte kopplad. Koppla den för att hämta matcher automatiskt.</p><button class="btn primary" data-a="lk-link">Koppla till tulospalvelu</button></div>`;
+  if(!s.tp)return `<div class="card"><h2>Tulospalvelu</h2><p class="note" style="margin:0 0 10px">${T("Den här säsongen är inte kopplad till tulospalvelu.","Tätä kautta ei ole yhdistetty tulospalveluun.")}</p><button class="btn primary" data-a="lk-link">${T("Koppla till tulospalvelu","Yhdistä tulospalveluun")}</button></div>`;
+  const skip=s.tpSkip.length;
   return `<div class="card"><h2>Tulospalvelu</h2>
-    <p style="margin:0 0 6px">Kopplad till lag-id ${esc(s.tp.tid)}, serie-id ${esc(s.tp.ssid)}, säsong ${esc(s.tp.season)}.</p>
-    <p class="note" style="margin:0 0 12px">Senast hämtat: ${s.tpAt?esc(new Date(s.tpAt).toLocaleString("sv-SE",{dateStyle:"medium",timeStyle:"short"})):"aldrig"}.</p>
+    <p class="note" style="margin:0 0 12px">${T("Senast hämtat","Viimeksi haettu")}: ${s.tpAt?esc(new Date(s.tpAt).toLocaleString(loc(),{dateStyle:"medium",timeStyle:"short"})):T("aldrig","ei koskaan")}. ${T("Vanlig hämtning kontrollerar matcherna från de senaste 30 dagarna.","Tavallinen haku tarkistaa viimeisen 30 päivän ottelut.")}</p>
     <p style="display:grid;gap:8px;margin:0">
-      <button class="btn" data-a="tp-force" ${S.sync?"disabled":""}>${S.confirm==="tpforce"?"Säker? Ändringar i hämtade matcher skrivs över":"Hämta om alla matcher"}</button>
-      <button class="btn" data-a="lk-link">Byt lag eller serie</button>
-      <button class="btn danger" data-a="tp-unlink">${S.confirm==="tpunlink"?"Säker? Tryck igen":"Koppla bort"}</button></p>
-    <p class="note">Hämtade matcher finns kvar om du kopplar bort. Manuellt inlagda matcher påverkas aldrig.</p></div>`;
+      <button class="btn" data-a="tp-full" ${S.sync?"disabled":""}>${T("Kontrollera hela säsongen","Tarkista koko kausi")}</button>
+      ${skip?`<button class="btn" data-a="tp-unskip">${S.confirm==="unskip"?T("Säker? De hämtas vid nästa hämtning","Varma? Ne haetaan seuraavalla haulla"):T("Hämta bortvalda matcher igen","Hae pois valitut ottelut uudelleen")+" ("+skip+")"}</button>`:""}
+      <button class="btn" data-a="lk-link">${T("Byt lag eller serie","Vaihda joukkue tai sarja")}</button>
+      <button class="btn danger" data-a="tp-unlink">${S.confirm==="tpunlink"?T("Säker? Tryck igen","Varma? Paina uudelleen"):T("Koppla bort","Poista yhteys")}</button></p>
+    <p class="note">${T("Kontrollen ändrar aldrig dina egna matcher eller +/- som du fyllt i.","Tarkistus ei koskaan muuta omia otteluitasi tai täyttämääsi +/- -tietoa.")}</p></div>`;
 }
 function viewData(){
-  const when=D.last?new Date(D.last).toLocaleString("sv-SE",{dateStyle:"medium",timeStyle:"short"}):"aldrig";
-  const t=D.seasons.reduce((a,s)=>({p:a.p+s.players.length,m:a.m+s.matches.length,g:a.g+s.goals.length,u:a.u+s.pens.length}),{p:0,m:0,g:0,u:0});
   if(S.link)return linkCard();
-  return `${tpDataCard()}${proxyCard()}<div class="card"><h2>Säkerhetskopia</h2>
-    <p style="margin:0 0 6px">Senast sparad som fil: <b>${esc(when)}</b><br>${D.changes||0} ändringar sedan dess.</p>
-    <p class="note" style="margin:0 0 12px">${D.seasons.length} säsong(er), ${t.p} spelare, ${t.m} matcher, ${t.g} mål, ${t.u} utvisningar.</p>
-    ${storageOK?"":`<p class="warn">Den här webbläsaren kan inte spara data mellan besök. Spara en fil efter varje matchdag.</p>`}
-    <p style="display:grid;gap:8px;margin:0"><button class="btn primary" data-a="exp-share">Dela fil (WhatsApp m.m.)</button><button class="btn" data-a="exp-dl">Spara som CSV-fil</button></p>
-    <p class="note">Datan ligger bara på den här enheten. Spara en fil då och då som säkerhetskopia, särskilt innan du rensar webbläsarens data. CSV-filen går också att öppna i Excel.</p></div>
-    ${S.csvText?`<div class="card"><h2>Filtext</h2><p class="note" style="margin:0 0 8px">Filen kunde inte sparas direkt. Markera texten, kopiera och klistra in i en textfil som du sparar som .csv.</p><textarea class="in" rows="8" readonly>${esc(S.csvText)}</textarea></div>`:""}
-    ${importCard()}`;
+  const when=D.last?new Date(D.last).toLocaleString(loc(),{dateStyle:"medium",timeStyle:"short"}):T("aldrig","ei koskaan");
+  return `${tpDataCard()}<div class="card"><h2>${T("Säkerhetskopia","Varmuuskopio")}</h2>
+    <p style="margin:0 0 6px">${T("Senast sparad som fil","Viimeksi tallennettu tiedostoon")}: <b>${esc(when)}</b><br>${D.changes||0} ${T("egna ändringar sedan dess.","omaa muutosta sen jälkeen.")}</p>
+    ${storageOK?"":`<p class="warn">${T("Den här webbläsaren kan inte spara data mellan besök. Spara en fil efter varje matchdag.","Tämä selain ei voi tallentaa tietoja käyntien välillä. Tallenna tiedosto jokaisen pelipäivän jälkeen.")}</p>`}
+    <p style="display:grid;gap:8px;margin:0"><button class="btn primary" data-a="exp-share">${T("Dela fil (WhatsApp m.m.)","Jaa tiedosto (WhatsApp ym.)")}</button><button class="btn" data-a="exp-dl">${T("Spara som CSV-fil","Tallenna CSV-tiedostona")}</button></p>
+    <p class="note">${T("Det som hämtas från tulospalvelu kan alltid hämtas igen. Filen behövs för det du lagt in själv: egna matcher, +/-, namnändringar och dolda spelare.","Tulospalvelusta haetut tiedot voi aina hakea uudelleen. Tiedostoa tarvitaan itse kirjaamiisi tietoihin: omat ottelut, +/-, nimimuutokset ja piilotetut pelaajat.")}</p></div>
+    ${S.csvText?`<div class="card"><h2>${T("Filtext","Tiedoston sisältö")}</h2><p class="note" style="margin:0 0 8px">${T("Filen kunde inte sparas direkt. Kopiera texten och spara den som .csv.","Tiedostoa ei voitu tallentaa suoraan. Kopioi teksti ja tallenna se .csv-tiedostona.")}</p><textarea class="in" rows="8" readonly>${esc(S.csvText)}</textarea></div>`:""}
+    ${importCard()}${proxyCard()}`;
 }
 function sheetHtml(){
   const s=cur();
-  return `<div class="scrim" data-a="closesheet"><div class="sheet" data-a="stay"><h2>Lag och säsong</h2>
+  return `<div class="scrim" data-a="closesheet"><div class="sheet" data-a="stay"><h2>${T("Lag och säsong","Joukkue ja kausi")}</h2>
    <div class="sl">${D.seasons.map(x=>`<button data-a="season" data-id="${esc(x.id)}" aria-pressed="${x.id===sid}"><b>${esc(x.lag)}</b> · ${esc(x.sasong||"")}<br><small style="color:var(--muted)">${esc(x.serie||"")}</small></button>`).join("")}</div>
-   ${s?`<div class="card"><h2>Ändra uppgifter</h2><div class="fields"><label class="wide">Lag<input class="in" id="es-lag" value="${esc(s.lag)}"></label><label class="wide">Serie<input class="in" id="es-serie" value="${esc(s.serie||"")}"></label><label class="wide">Säsong<input class="in" id="es-sas" value="${esc(s.sasong||"")}"></label></div><p style="margin:12px 0 0;display:flex;gap:8px"><button class="btn primary" data-a="esave">Spara</button><button class="btn danger" data-a="sdel">${S.confirm==="s:"+s.id?"Säker? Tryck igen":"Ta bort säsongen"}</button></p></div>`:""}
-   <p style="margin:0 0 12px"><button class="btn primary" style="width:100%" data-a="lk-new">+ Nytt lag från tulospalvelu</button></p>
+   ${s?`<div class="card"><h2>${T("Ändra uppgifter","Muokkaa tietoja")}</h2><div class="fields"><label class="wide">${T("Lag","Joukkue")}<input class="in" id="es-lag" value="${esc(s.lag)}"></label><label class="wide">${T("Serie","Sarja")}<input class="in" id="es-serie" value="${esc(s.serie||"")}"></label><label class="wide">${T("Säsong","Kausi")}<input class="in" id="es-sas" value="${esc(s.sasong||"")}"></label></div><p style="margin:12px 0 0;display:flex;gap:8px"><button class="btn primary" data-a="esave">${T("Spara","Tallenna")}</button><button class="btn danger" data-a="sdel">${S.confirm==="s:"+s.id?T("Säker? Tryck igen","Varma? Paina uudelleen"):T("Ta bort säsongen","Poista kausi")}</button></p></div>`:""}
+   <p style="margin:0 0 12px"><button class="btn primary" style="width:100%" data-a="lk-new">${T("+ Nytt lag från tulospalvelu","+ Uusi joukkue tulospalvelusta")}</button></p>
    ${seasonForm(false)}
-   <p style="margin:12px 0 0"><button class="btn" style="width:100%" data-a="closesheet">Stäng</button></p></div></div>`;
+   <p style="margin:12px 0 0"><button class="btn" style="width:100%" data-a="closesheet">${T("Stäng","Sulje")}</button></p></div></div>`;
 }
 function header(){
   const s=cur();let pill="";
-  if(!storageOK)pill=`<button class="pill" data-a="tab" data-v="data">Sparas inte, spara fil</button>`;
-  else if((D.changes||0)>0)pill=`<button class="pill" data-a="tab" data-v="data">${D.changes} ej sparade i fil</button>`;
-  return `<div class="top"><button class="seasonbtn" data-a="sheet">${s?esc(s.lag)+" · "+esc(s.sasong||""):"Välj lag"} ▾</button>${pill}</div>`;
+  if(!storageOK)pill=`<button class="pill" data-a="tab" data-v="data">${T("Sparas inte, spara fil","Ei tallennu, tallenna tiedosto")}</button>`;
+  else if((D.changes||0)>0)pill=`<button class="pill" data-a="tab" data-v="data">${D.changes} ${T("ej sparade i fil","tallentamatta")}</button>`;
+  const lang=`<div class="lang" role="group" aria-label="Språk / Kieli">${["sv","fi"].map(l=>`<button data-a="lang" data-v="${l}" aria-pressed="${LANG===l}">${l.toUpperCase()}</button>`).join("")}</div>`;
+  return `<div class="top"><button class="seasonbtn" data-a="sheet">${s?esc(s.lag)+" · "+esc(s.sasong||""):T("Välj lag","Valitse joukkue")} ▾</button><div class="topr">${pill}${lang}</div></div>`;
 }
 function nav(){
-  const T=[["lista","Lista"],["matcher","Matcher"],["spel","Spelare"],["data","Data"]];
-  return `<nav class="nav"><div class="navin">${T.map(([v,t])=>`<button data-a="tab" data-v="${v}" ${S.tab===v?'aria-current="page"':""}>${t}</button>`).join("")}</div></nav>`;
+  const TB=[["lista",T("Lista","Pörssi")],["matcher",T("Matcher","Ottelut")],["spel",T("Spelare","Pelaajat")],["data",T("Data","Tiedot")]];
+  return `<nav class="nav"><div class="navin">${TB.map(([v,t])=>`<button data-a="tab" data-v="${v}" ${S.tab===v?'aria-current="page"':""}>${t}</button>`).join("")}</div></nav>`;
 }
 function render(force){
   const act=document.activeElement;
   if(!force&&act&&/^(INPUT|SELECT|TEXTAREA)$/.test(act.tagName)&&$("#app").contains(act)){S.pending=true;return}
   S.pending=false;
+  document.documentElement.lang=LANG;document.title=T("Lagets poängliga","Joukkueen pistepörssi");
   const y=window.scrollY;
   let body;
   if(!cur())body=emptyState();
   else if(S.tab==="lista")body=viewLista();else if(S.tab==="matcher")body=viewMatches();else if(S.tab==="data")body=viewData();else body=viewPlayers();
   const shot=S.shot&&S.tab==="lista";
   document.body.classList.toggle("shot",shot);
-  $("#app").innerHTML=(shot?"":header())+body+(shot?"":nav())+(S.sheet&&!shot?sheetHtml():"")+(S.toast&&!shot?`<div class="toast" role="status"><span>${esc(S.toast.text)}</span>${S.toast.undo?`<button data-a="undo">Ångra</button>`:""}</div>`:"");
+  $("#app").innerHTML=(shot?"":header())+body+(shot?"":nav())+(S.sheet&&!shot?sheetHtml():"")+(S.toast&&!shot?`<div class="toast" role="status"><span>${esc(S.toast.text)}</span>${S.toast.undo?`<button data-a="undo">${T("Ångra","Kumoa")}</button>`:""}</div>`:"");
   window.scrollTo(0,y);
 }
 function toast(text,undo){S.toast={text,undo:undo||null};clearTimeout(toastTimer);toastTimer=setTimeout(()=>{S.toast=null;render()},7000)}
@@ -328,8 +408,10 @@ function setMid(id){S.mid=id;LS.set("mid",id)}
 function switchSeason(id){LS.set("sid",id);sid=id;S.sheet=false;S.ev=null;S.mform=null;setMid(null);sync();render(true)}
 function go(fn){fn();render(true);window.scrollTo(0,0)}
 
-/* ---------- CSV ---------- */
-const CSV_HEAD=["typ","lag","serie","sasong","match","datum","motstandare","nr","namn","pos","assist1_nr","assist2_nr","minuter","spelare_nr","tp_id"];
+/* ---------- CSV ----------
+   Kolumnen tp_id betyder: GameID på match-rader, person-ID på spelare-rader och händelse-ID
+   (t.ex. Goal_9) på mal/slappt-rader. matchtyp: serie, serie0 (serie utan resultat i tulospalvelu), tr, cup. */
+const CSV_HEAD=["typ","lag","serie","sasong","match","datum","motstandare","nr","namn","pos","assist1_nr","assist2_nr","minuter","spelare_nr","tp_id","matchtyp","resultat","dold"];
 const TP_KEYS=[["tp_season","season"],["tp_serieid","ssid"],["tp_lagid","tid"],["tp_serie","serieId"]];
 const q=v=>{v=v==null?"":String(v);return /[;"\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
 function toCSV(){
@@ -337,18 +419,19 @@ function toCSV(){
   [...D.seasons].sort((a,b)=>(a.created||0)-(b.created||0)).forEach(s=>{
     const nrOf=id=>{const p=s.players.find(x=>x.id===id);return p?p.nr:""};
     const list=ids=>uniq(ids).map(id=>s.players.find(x=>x.id===id)).filter(Boolean).sort(nrCmp).map(p=>p.nr).join(" ");
-    const R=o=>rows.push([o.typ,s.lag,s.serie||"",s.sasong||"",o.m||"",o.d||"",o.o||"",o.nr==null?"":o.nr,o.namn||"",o.pos||"",o.a1==null?"":o.a1,o.a2==null?"":o.a2,o.min==null?"":o.min,o.l||"",o.gid||""]);
+    const R=o=>rows.push([o.typ,s.lag,s.serie||"",s.sasong||"",o.m||"",o.d||"",o.o||"",o.nr==null?"":o.nr,o.namn||"",o.pos||"",o.a1==null?"":o.a1,o.a2==null?"":o.a2,o.min==null?"":o.min,o.l||"",o.id||"",o.mt||"",o.res||"",o.dold?"1":""]);
     R({typ:"installning",namn:"plusminus",nr:s.pm?1:0});
     if(s.tp)TP_KEYS.forEach(([n,k])=>R({typ:"installning",namn:n,nr:s.tp[k]||0}));
-    s.players.slice().sort(nrCmp).forEach(p=>R({typ:"spelare",nr:p.nr,namn:p.name,pos:p.pos||"UP"}));
+    if(s.tpSkip.length)R({typ:"installning",namn:"tp_bortvalda",l:s.tpSkip.join(" ")});
+    s.players.slice().sort(nrCmp).forEach(p=>R({typ:"spelare",nr:p.nr,namn:p.name,pos:p.pos||"UP",id:p.tpid,dold:p.hide}));
     const ms=s.matches.slice().sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))||(a.ts||0)-(b.ts||0));
     const key=new Map(ms.map((m,i)=>[m.id,"m"+(i+1)]));
-    ms.forEach(m=>R({typ:"match",m:key.get(m.id),d:m.date,o:m.opp,l:list(m.players),gid:m.gid}));
+    ms.forEach(m=>R({typ:"match",m:key.get(m.id),d:m.date,o:m.opp,l:list(m.players),id:m.gid,mt:mtype(m)==="serie"&&m.nores?"serie0":mtype(m),res:Array.isArray(m.res)?m.res.join("-"):""}));
     const mm=id=>s.matches.find(m=>m.id===id)||{};
     [...s.goals.map(x=>["mal",x]),...s.ga.map(x=>["slappt",x]),...s.pens.map(x=>["utvisning",x])].sort((a,b)=>(a[1].ts||0)-(b[1].ts||0)).forEach(([t,x])=>{
       const m=mm(x.mid),base={typ:t,m:key.get(x.mid)||"",d:m.date,o:m.opp};
-      if(t==="mal")R({...base,nr:nrOf(x.scorer),a1:nrOf(x.a1),a2:nrOf(x.a2),l:list(x.ice)});
-      else if(t==="slappt")R({...base,l:list(x.ice)});
+      if(t==="mal")R({...base,nr:nrOf(x.scorer),a1:nrOf(x.a1),a2:nrOf(x.a2),l:list(x.ice),id:x.k});
+      else if(t==="slappt")R({...base,l:list(x.ice),id:x.k});
       else R({...base,nr:nrOf(x.pid),min:x.min});
     });
   });
@@ -379,52 +462,61 @@ function normDate(s){
 const norm=t=>String(t||"").trim().toLowerCase().replace(/[åä]/g,"a").replace(/ö/g,"o");
 function parseImport(text){
   const rows=parseCSV(text);
-  if(rows.length<2)return {error:"Filen innehåller inga rader."};
+  if(rows.length<2)return {error:T("Filen innehåller inga rader.","Tiedostossa ei ole rivejä.")};
   const H=rows[0].map(norm),ix=n=>H.indexOf(n);
-  if(ix("typ")<0||ix("lag")<0||ix("nr")<0)return {error:"Det här ser inte ut som en databasfil från appen (kolumnerna typ, lag och nr saknas)."};
+  if(ix("typ")<0||ix("lag")<0||ix("nr")<0||ix("match")<0)return {error:T("Det här ser inte ut som en fil från appen (kolumnerna typ, lag, match och nr saknas).","Tämä ei näytä sovelluksen tiedostolta (sarakkeet typ, lag, match ja nr puuttuvat).")};
   const g=(r,n)=>{const i=ix(n);return i<0?"":String(r[i]==null?"":r[i]).trim()};
   const seasons=new Map(),warnings=[];let n=0;
+  const W=(line,sv,fi)=>warnings.push(T("Rad ","Rivi ")+line+": "+T(sv,fi));
   const seasonOf=r=>{const k=[g(r,"lag"),g(r,"serie"),g(r,"sasong")].join("\u0001");
     if(!seasons.has(k)){const s=newSeason(g(r,"lag")||"Lag",g(r,"serie"),g(r,"sasong"),[],seasons.size+1);s._mk=new Map();seasons.set(k,s)}
     return seasons.get(k)};
-  const body=rows.slice(1).map((r,i)=>{let t=norm(g(r,"typ"));if(t==="inslappt")t="slappt";return {r,line:i+2,t}});
+  const body=rows.slice(1).map((r,i)=>({r,line:i+2,t:norm(g(r,"typ"))}));
   const find=(s,v)=>{const nr=parseInt(v,10);return isNaN(nr)?null:(s.players.find(p=>Number(p.nr)===nr)||null)};
-  const ids=(s,v,line)=>String(v||"").split(/[\s,]+/).filter(Boolean).map(x=>{const p=find(s,x);if(!p)warnings.push("Rad "+line+": nummer "+x+" finns inte, ignorerat");return p&&p.id}).filter(Boolean);
+  const ids=(s,v,line)=>String(v||"").split(/[\s,]+/).filter(Boolean).map(x=>{const p=find(s,x);if(!p)W(line,"nummer "+x+" finns inte, ignorerat","numeroa "+x+" ei ole, ohitettu");return p&&p.id}).filter(Boolean);
   body.filter(o=>o.t==="installning").forEach(({r})=>{
-    const n=norm(g(r,"namn")),s=seasonOf(r);
-    if(n==="plusminus")s.pm=g(r,"nr")==="1";
-    const tk=TP_KEYS.find(([x])=>x===n),v=parseInt(g(r,"nr"),10);
+    const nm=norm(g(r,"namn")),s=seasonOf(r);
+    if(nm==="plusminus")s.pm=g(r,"nr")==="1";
+    if(nm==="tp_bortvalda")s.tpSkip=String(g(r,"spelare_nr")).split(/\s+/).map(Number).filter(x=>x>0);
+    const tk=TP_KEYS.find(([x])=>x===nm),v=parseInt(g(r,"nr"),10);
     if(tk&&v>0){s.tp=s.tp||{};s.tp[tk[1]]=v}
   });
   body.filter(o=>o.t==="spelare").forEach(({r,line})=>{
     const s=seasonOf(r),nr=parseInt(g(r,"nr"),10),name=g(r,"namn");
-    if(isNaN(nr)||!name){warnings.push("Rad "+line+": spelare utan nummer eller namn hoppades över");return}
-    if(s.players.some(p=>Number(p.nr)===nr)){warnings.push("Rad "+line+": nummer "+nr+" fanns redan, hoppades över");return}
-    s.players.push({id:uid(),nr,name,pos:g(r,"pos").toUpperCase()==="MV"?"MV":"UP"});
+    if(isNaN(nr)||!name){W(line,"spelare utan nummer eller namn hoppades över","pelaaja ilman numeroa tai nimeä ohitettiin");return}
+    if(s.players.some(p=>Number(p.nr)===nr)){W(line,"nummer "+nr+" fanns redan, hoppades över","numero "+nr+" oli jo käytössä, ohitettiin");return}
+    const p={id:uid(),nr,name,pos:g(r,"pos").toUpperCase()==="MV"?"MV":"UP"};
+    const tpid=parseInt(g(r,"tp_id"),10);if(tpid>0)p.tpid=tpid;
+    if(g(r,"dold")==="1")p.hide=true;
+    s.players.push(p);
   });
   body.filter(o=>o.t==="match").forEach(({r,line})=>{
-    const s=seasonOf(r),k=g(r,"match")||(g(r,"datum")+"|"+g(r,"motstandare"));
-    const m={id:uid(),date:normDate(g(r,"datum")),opp:g(r,"motstandare"),players:ids(s,g(r,"spelare_nr"),line),ts:++n};
-    const gid=parseInt(g(r,"tp_id"),10);if(gid>0)m.gid=gid;
+    const s=seasonOf(r),k=g(r,"match");
+    if(!k){W(line,"match utan nyckel hoppades över","ottelu ilman tunnistetta ohitettiin");return}
+    const mt=g(r,"matchtyp");
+    const m={id:uid(),date:normDate(g(r,"datum")),opp:g(r,"motstandare"),players:ids(s,g(r,"spelare_nr"),line),ts:++n,type:mt==="serie0"?"serie":(["serie","tr","cup"].includes(mt)?mt:"tr")};
+    const gid=parseInt(g(r,"tp_id"),10);if(gid>0){m.gid=gid;m.type="serie";if(mt==="serie0")m.nores=true}
+    const rm=g(r,"resultat").match(/^(\d+)\s*[-–]\s*(\d+)$/);if(rm)m.res=[Number(rm[1]),Number(rm[2])];
     s.matches.push(m);s._mk.set(k,m);
   });
-  const place=(s,r,ev)=>{const k=g(r,"match"),m=k&&s._mk.get(k);if(m)ev.mid=m.id;else{ev.date=normDate(g(r,"datum"));ev.opp=g(r,"motstandare")}return ev};
+  const place=(s,r,line,ev)=>{const m=s._mk.get(g(r,"match"));if(!m){W(line,"händelse utan match hoppades över","tapahtuma ilman ottelua ohitettiin");return null}ev.mid=m.id;const k=g(r,"tp_id");if(k)ev.k=k;return ev};
   body.forEach(({r,line,t})=>{
+    const s=t==="mal"||t==="slappt"||t==="utvisning"?seasonOf(r):null;let ev;
     if(t==="mal"){
-      const s=seasonOf(r),sc=find(s,g(r,"nr"));
-      if(!sc){warnings.push("Rad "+line+": målskytt "+g(r,"nr")+" finns inte, målet hoppades över");return}
-      const a=["assist1_nr","assist2_nr"].map(c=>{const v=g(r,c);if(!v)return null;const p=find(s,v);if(!p)warnings.push("Rad "+line+": assist "+v+" finns inte, ignorerad");return p?p.id:null});
-      s.goals.push(place(s,r,{id:uid(),scorer:sc.id,a1:a[0],a2:a[1],ice:ids(s,g(r,"spelare_nr"),line),ts:++n}));
+      const sc=find(s,g(r,"nr"));
+      if(!sc){W(line,"målskytt "+g(r,"nr")+" finns inte, målet hoppades över","maalintekijää "+g(r,"nr")+" ei ole, maali ohitettiin");return}
+      const a=["assist1_nr","assist2_nr"].map(c=>{const v=g(r,c);if(!v)return null;const p=find(s,v);if(!p)W(line,"assist "+v+" finns inte, ignorerad","syöttäjää "+v+" ei ole, ohitettu");return p?p.id:null});
+      if(ev=place(s,r,line,{id:uid(),scorer:sc.id,a1:a[0],a2:a[1],ice:ids(s,g(r,"spelare_nr"),line),ts:++n}))s.goals.push(ev);
     }else if(t==="slappt"){
-      const s=seasonOf(r);s.ga.push(place(s,r,{id:uid(),ice:ids(s,g(r,"spelare_nr"),line),ts:++n}));
+      if(ev=place(s,r,line,{id:uid(),ice:ids(s,g(r,"spelare_nr"),line),ts:++n}))s.ga.push(ev);
     }else if(t==="utvisning"){
-      const s=seasonOf(r),p=find(s,g(r,"nr")),min=Number(String(g(r,"minuter")).replace(",","."));
-      if(!p||!(min>0)){warnings.push("Rad "+line+": utvisning utan giltigt nummer eller minuter hoppades över");return}
-      s.pens.push(place(s,r,{id:uid(),pid:p.id,min,ts:++n}));
+      const p=find(s,g(r,"nr")),min=Number(String(g(r,"minuter")).replace(",","."));
+      if(!p||!(min>0)){W(line,"utvisning utan giltigt nummer eller minuter hoppades över","jäähy ilman kelvollista numeroa tai minuutteja ohitettiin");return}
+      if(ev=place(s,r,line,{id:uid(),pid:p.id,min,ts:++n}))s.pens.push(ev);
     }
   });
-  const list=[...seasons.values()];list.forEach(s=>{delete s._mk;if(s.tp&&!(s.tp.season&&s.tp.ssid&&s.tp.tid))delete s.tp;migrateSeason(s)});
-  if(!list.length)return {error:"Hittade inga spelare eller händelser i filen."};
+  const list=[...seasons.values()];list.forEach(s=>{delete s._mk;if(s.tp&&!(s.tp.season&&s.tp.ssid&&s.tp.tid))delete s.tp;fixSeason(s)});
+  if(!list.length)return {error:T("Hittade inga spelare eller matcher i filen.","Tiedostosta ei löytynyt pelaajia tai otteluita.")};
   const sum=f=>list.reduce((a,s)=>a+s[f].length,0);
   return {seasons:list,warnings,counts:{seasons:list.length,players:sum("players"),matches:sum("matches"),goals:sum("goals"),pens:sum("pens")}};
 }
@@ -440,8 +532,8 @@ async function exportDownload(){
     const url=URL.createObjectURL(new Blob([text],{type:"text/csv;charset=utf-8"}));
     const a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),5000);
-    markExported();toast("Filen sparades som "+name+". Titta i Hämtade filer.");
-  }catch(e){S.csvText=text;toast("Filen kunde inte sparas direkt. Kopiera texten nedan.");render(true)}
+    markExported();toast(T("Filen sparades som ","Tiedosto tallennettiin nimellä ")+name+".");
+  }catch(e){S.csvText=text;toast(T("Filen kunde inte sparas direkt. Kopiera texten nedan.","Tiedostoa ei voitu tallentaa suoraan. Kopioi teksti alta."));render(true)}
 }
 async function exportShare(){
   const {text,name}=csvFile();
@@ -449,18 +541,18 @@ async function exportShare(){
     const file=new File([text],name,{type:"text/csv"});
     if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:name});markExported();return}
   }catch(e){if(e&&e.name==="AbortError")return}
-  toast("Den här webbläsaren kan inte dela filer direkt. Använd Spara som CSV-fil.");render(true);
+  toast(T("Den här webbläsaren kan inte dela filer direkt. Använd Spara som CSV-fil.","Tämä selain ei voi jakaa tiedostoja suoraan. Käytä Tallenna CSV-tiedostona."));render(true);
 }
 async function readFile(file){
   try{return await file.text()}catch(e){return await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result));r.onerror=rej;r.readAsText(file)})}
 }
 
 /* ---------- tulospalvelu.leijonat.fi ----------
-   Tjänsten har inget officiellt API men använder öppna JSON-endpoints. Den skickar inga
-   CORS-headers, så anropen måste gå via en proxy (proxy/worker.js eller proxy/server.js).
-   Fyll i TP_DEFAULT_PROXY med Worker-adressen så slipper användarna ställa in den själva. */
+   Inget officiellt API, men öppna JSON-endpoints. Tjänsten skickar inga CORS-headers, så anropen går
+   via en proxy (proxy/worker.js, driftsatt på adressen nedan, eller proxy/server.js lokalt). */
 const TP_SITE="https://tulospalvelu.leijonat.fi/";
 const TP_DEFAULT_PROXY="https://tulospalvelu-proxy.matti-rantakangas.workers.dev/";
+const TP_RECENT_DAYS=30;
 function tpBase(){
   const p=String(LS.get("proxy","")||TP_DEFAULT_PROXY).trim();
   if(p)return p.replace(/\/*$/,"/");
@@ -470,43 +562,46 @@ function tpBase(){
 async function tp(path,params){
   let r;
   try{r=await fetch(tpBase()+path+"?"+new URLSearchParams(params),{headers:{accept:"application/json"}})}
-  catch(e){throw new Error("Kunde inte nå tulospalvelu. Kontrollera nätet och proxyadressen under Data → Anslutning.")}
-  if(r.status===429)throw new Error("Tulospalvelu säger att det kommit för många anrop. Vänta en stund och försök igen.");
-  if(!r.ok)throw new Error("Tulospalvelu svarade med fel "+r.status+". Kontrollera proxyadressen under Data → Anslutning.");
-  try{return await r.json()}catch(e){throw new Error("Svaret var inte data från tulospalvelu. Kontrollera proxyadressen under Data → Anslutning.")}
+  catch(e){throw new Error(T("Kunde inte nå tulospalvelu. Kontrollera nätet.","Tulospalveluun ei saatu yhteyttä. Tarkista verkkoyhteys."))}
+  if(r.status===429)throw new Error(T("Tulospalvelu säger att det kommit för många anrop. Vänta en stund och försök igen.","Tulospalvelu ilmoittaa liian monesta kyselystä. Odota hetki ja yritä uudelleen."));
+  if(!r.ok)throw new Error(T("Tulospalvelu svarade med fel ","Tulospalvelu vastasi virheellä ")+r.status+".");
+  try{return await r.json()}catch(e){throw new Error(T("Svaret var inte data från tulospalvelu. Kontrollera proxyadressen under Data.","Vastaus ei ollut tulospalvelun dataa. Tarkista välityspalvelimen osoite kohdassa Tiedot."))}
 }
 const tpSeasonNow=()=>{const d=new Date();return d.getMonth()>=4?d.getFullYear()+1:d.getFullYear()};
 const tpName=(first,last)=>[first,last].filter(Boolean).join(" ").toLowerCase().replace(/(^|[\s-])(\p{L})/gu,(m,a,b)=>a+b.toUpperCase());
 /* Loggarna skriver namn som "EFTERNAMN Förnamn". */
 const tpLogName=s=>{const w=String(s||"").trim().split(/\s+/);return w.length>1?tpName(w.slice(1).join(" "),w[0]):tpName(w[0]||"","")};
 const nameKey=n=>norm(n).replace(/[^a-z0-9 ]/g,"").replace(/\s+/g," ").trim();
-/* Hitta spelaren: först på exakt namn (nummer kan skilja mellan matcher), sedan på nummer.
-   Finns ingen och namnet är känt läggs spelaren till. */
-function tpPlayer(s,nr,name,role,added){
-  nr=Number(nr);
-  const k=name?nameKey(name):"";
-  let p=k?s.players.find(x=>nameKey(x.name)===k):null;
-  if(!p&&nr>0)p=s.players.find(x=>Number(x.nr)===nr);
-  if(!p&&name&&nr>0){p={id:uid(),nr,name,pos:role==="MV"?"MV":"UP"};s.players.push(p);if(added)added.push(p)}
+/* Hitta spelaren: 1) tulospalvelus person-ID, 2) namnet som det står i tulospalvelu, 3) tröjnummer
+   (inte om numret hör till en annan känd person). Annars läggs spelaren till. */
+function tpPlayer(s,o,added){
+  const nr=Number(o.nr),k=o.name?nameKey(o.name):"",tpid=Number(o.tpid)||0;
+  let p=tpid?s.players.find(x=>x.tpid===tpid):null;
+  if(!p&&k)p=s.players.find(x=>(!tpid||!x.tpid)&&nameKey(x.tpName||x.name)===k);
+  if(!p&&nr>0)p=s.players.find(x=>Number(x.nr)===nr&&(!tpid||!x.tpid));
+  if(!p&&o.name&&nr>0){p={id:uid(),nr,name:o.name,pos:o.role==="MV"?"MV":"UP"};s.players.push(p);if(added)added.push(p)}
+  if(p){if(tpid&&!p.tpid)p.tpid=tpid;if(o.name&&!p.tpName)p.tpName=o.name}
   return p||null;
 }
 const tpNrs=str=>String(str||"").match(/\d+/g)||[];
 
-/* Gör om en match från tulospalvelu till appens format. Ersätter en tidigare hämtning av samma match. */
+/* Gör om en match med protokoll till appens format. Ersätter tidigare hämtning av samma match,
+   men behåller +/- (På isen) som användaren fyllt i när tulospalvelu saknar det. */
 function tpImportGame(s,g,rep,sum,added){
   const tid=s.tp.tid,home=g.HomeTeam===tid,date=normDate(g.GameDate);
   const base=Date.parse(date+"T"+(g.GameTime||"12:00:00"))||Date.now();
   let m=s.matches.find(x=>x.gid===g.GameID);
-  if(m)["goals","ga","pens"].forEach(k=>s[k]=s[k].filter(x=>x.mid!==m.id));
-  else{m={id:uid(),gid:g.GameID,players:[]};s.matches.push(m)}
-  m.date=date;m.opp=home?g.AwayTeamAbbrv:g.HomeTeamAbbrv;m.ts=base;delete m.auto;
+  const keep=new Map();
+  if(m){
+    [...s.goals,...s.ga].filter(x=>x.mid===m.id&&x.k&&x.ice.length).forEach(x=>keep.set(x.k,x.ice));
+    ["goals","ga","pens"].forEach(k=>s[k]=s[k].filter(x=>x.mid!==m.id));
+  }else{m={id:uid(),gid:g.GameID,players:[]};s.matches.push(m)}
+  m.date=date;m.opp=home?g.AwayTeamAbbrv:g.HomeTeamAbbrv;m.ts=base;m.type="serie";delete m.nores;delete m.res;
   const roster=((home?sum.HomeTeamGameRoster:sum.AwayTeamGameRoster)||{}).Players||[];
-  /* Tröjnummer → spelare för just den här matchen */
   const jersey=new Map();
-  roster.forEach(r=>{const p=tpPlayer(s,r.JerseyNr,tpName(r.FirstName,r.LastName),r.RoleAbbrv,added);if(p)jersey.set(Number(r.JerseyNr),p.id)});
-  const ids=[...jersey.values()];
-  const byLog=(nr,name)=>{nr=Number(nr);if(!(nr>0))return null;if(jersey.has(nr))return jersey.get(nr);const p=tpPlayer(s,nr,name?tpLogName(name):"","",added);if(p)jersey.set(nr,p.id);return p?p.id:null};
-  const ice=str=>uniq(tpNrs(str).map(n=>byLog(n)));
+  roster.forEach(r=>{const p=tpPlayer(s,{tpid:r.PersonID,nr:r.JerseyNr,name:tpName(r.FirstName,r.LastName),role:r.RoleAbbrv},added);if(p)jersey.set(Number(r.JerseyNr),p.id)});
+  const byLog=(nr,name)=>{nr=Number(nr);if(!(nr>0))return null;if(jersey.has(nr))return jersey.get(nr);const p=tpPlayer(s,{nr,name:name?tpLogName(name):""},added);if(p)jersey.set(nr,p.id);return p?p.id:null};
+  const ice=str=>uniq(tpNrs(str).map(x=>byLog(x)));
   let pmSeen=false,skipped=0,teamPen=0,pH=0,pA=0;
   const logs=(rep.GameLogsUpdate||[]).slice().sort((a,b)=>(a.Period-b.Period)||(a.GameTime-b.GameTime));
   logs.forEach((l,i)=>{
@@ -517,73 +612,114 @@ function tpImportGame(s,g,rep,sum,added){
       const counts=known?(l.TeamId===g.HomeTeam?h>pH:a>pA):!/no goal/i.test(l.GoalSpecialTypeEN||"");
       if(known){pH=h;pA=a}
       if(!counts)return;
+      const k=l.Key||null;
       if(l.TeamId===tid){
         const sc=byLog(l.ScorerJersey,l.ScorerName);
         if(!sc){skipped++;return}
-        const on=ice(l.Plus);if(on.length)pmSeen=true;
-        s.goals.push({id:uid(),mid:m.id,scorer:sc,a1:byLog(l.FirstAssistJersey,l.FirstAssistName),a2:byLog(l.SecondAssistJersey,l.SecondAssistName),ice:on,ts});
+        let on=ice(l.Plus);if(on.length)pmSeen=true;else on=(k&&keep.get(k))||[];
+        s.goals.push({id:uid(),mid:m.id,k,scorer:sc,a1:byLog(l.FirstAssistJersey,l.FirstAssistName),a2:byLog(l.SecondAssistJersey,l.SecondAssistName),ice:on,ts});
       }else{
-        const on=ice(l.Minus);if(on.length)pmSeen=true;
-        s.ga.push({id:uid(),mid:m.id,ice:on,ts});
+        let on=ice(l.Minus);if(on.length)pmSeen=true;else on=(k&&keep.get(k))||[];
+        s.ga.push({id:uid(),mid:m.id,k,ice:on,ts});
       }
     }else if(l.Type==="Penalty"&&l.TeamId===tid){
       const pid=byLog(l.Jersey,l.Name),min=Number(l.PenaltyMinutesNumber)||0;
       if(pid&&min>0)s.pens.push({id:uid(),mid:m.id,pid,min,ts});else if(min>0)teamPen++;
     }
   });
-  m.players=uniq(ids);
-  migrateSeason(s); /* ser till att alla med statistik räknas som deltagare */
+  if(roster.length)m.players=uniq([...jersey.values()]);
+  fixSeason(s);
   return {pmSeen,skipped,teamPen};
 }
+/* Match i en serie där tulospalvelu inte visar resultat (t.ex. U10/U11): bara datum och motståndare
+   uppdateras. Resultat, spelare och händelser fyller användaren i själv. */
+function tpScheduleGame(s,g){
+  const tid=s.tp.tid,home=g.HomeTeam===tid,date=normDate(g.GameDate);
+  let m=s.matches.find(x=>x.gid===g.GameID);const isNew=!m;
+  if(!m){m={id:uid(),gid:g.GameID,players:[]};s.matches.push(m)}
+  m.date=date;m.opp=home?g.AwayTeamAbbrv:g.HomeTeamAbbrv;m.ts=Date.parse(date+"T"+(g.GameTime||"12:00:00"))||Date.now();m.type="serie";m.nores=true;
+  return isNew;
+}
 
-async function tpSync(force){
+async function tpSync(full){
   const s=cur();if(!s||!s.tp||S.sync)return;
-  S.sync={msg:"Hämtar spelschemat…"};render(true);
-  const added=[];let n=0,pm=false,skipped=0,teamPen=0,errMsg=null;
+  S.sync={msg:T("Hämtar spelschemat…","Haetaan otteluohjelmaa…")};render(true);
+  const added=[],conf=[];let n=0,pm=false,skipped=0,teamPen=0,errMsg=null,nNew=0,nChk=0,nSched=0;
   try{
     const {season,ssid,tid}=s.tp;
     const data=await tp("helpers/getgames",{season,subSerieId:ssid,teamid:tid,districtid:0,gamedays:3,dog:"",levelid:-1,dwl:0});
     const games=(Array.isArray(data)?data:[]).flatMap(l=>l.Games||[]).filter(g=>g.HomeTeam===tid||g.AwayTeam===tid);
-    /* Truppen hämtas varje gång, så att nya spelare kommer med även innan de spelat */
     if(s.tp.serieId){
       try{const r=await tp("helpers/getteamserieroster",{season,teamid:tid,serieId:s.tp.serieId,lang:"fi"});
-        (r.Players||[]).forEach(p=>tpPlayer(s,p.JerseyNr,tpName(p.FirstName,p.LastName),p.RoleAbbrv,added))}catch(e){}
+        (r.Players||[]).forEach(p=>tpPlayer(s,{tpid:p.PlayerID,nr:p.JerseyNr,name:tpName(p.FirstName,p.LastName),role:p.RoleAbbrv},added))}catch(e){}
     }
-    s.tpNext=games.filter(g=>g.GameStatus===0).slice(0,3).map(g=>({date:normDate(g.GameDate),time:(g.GameTime||"").slice(0,5),opp:g.HomeTeam===tid?g.AwayTeamAbbrv:g.HomeTeamAbbrv,home:g.HomeTeam===tid,rink:g.RinkName||""}));
-    const have=new Set(s.matches.filter(m=>m.gid).map(m=>m.gid));
-    const done=games.filter(g=>g.GameStatus===2&&!g.DeniedResults);
-    s.tpHidden=games.filter(g=>g.DeniedResults).length;
-    const todo=done.filter(g=>force||!have.has(g.GameID));
+    const now=today();
+    s.tpNext=games.filter(g=>g.GameStatus===0&&normDate(g.GameDate)>=now).slice(0,3).map(g=>({date:normDate(g.GameDate),time:(g.GameTime||"").slice(0,5),opp:g.HomeTeam===tid?g.AwayTeamAbbrv:g.HomeTeamAbbrv,home:g.HomeTeam===tid}));
+    const skip=new Set(s.tpSkip),have=new Set(s.matches.filter(m=>m.gid).map(m=>m.gid));
+    const clashWith=g=>s.matches.find(m=>!m.gid&&m.date===normDate(g.GameDate)&&!(m.notGid||[]).includes(g.GameID));
+    /* Serier utan resultat: lägg in spelade matcher från schemat */
+    s.tpNores=games.some(g=>g.DeniedResults);
+    games.filter(g=>g.DeniedResults&&!skip.has(g.GameID)&&normDate(g.GameDate)<=now).forEach(g=>{
+      if(!have.has(g.GameID)){const c=clashWith(g);if(c){conf.push({sid:s.id,g,mid:c.id,nores:true});return}}
+      if(tpScheduleGame(s,g))nSched++;
+    });
+    /* Serier med protokoll */
+    const cut=new Date(Date.now()-TP_RECENT_DAYS*864e5).toISOString().slice(0,10);
+    const done=games.filter(g=>g.GameStatus===2&&!g.DeniedResults&&!skip.has(g.GameID));
+    const todo=done.filter(g=>full||!have.has(g.GameID)||normDate(g.GameDate)>=cut);
     for(const g of todo){
-      n++;S.sync={msg:`Hämtar match ${n} av ${todo.length}…`};render(true);
+      n++;S.sync={msg:T(`Hämtar match ${n} av ${todo.length}…`,`Haetaan ottelua ${n}/${todo.length}…`)};render(true);
       const [rep,sum]=await Promise.all([
         tp("gamereport/getgamereportdata",{gameid:g.GameID,season}),
         tp("game/helpers/getsummary",{gameid:g.GameID,season,subSerieId:ssid,gamelength:g.GameEffTime||0})]);
       if(!rep||!rep.GamesUpdate)continue;
+      const isNew=!have.has(g.GameID);
+      if(isNew){const c=clashWith(g);if(c){conf.push({sid:s.id,g,rep,sum,mid:c.id});continue}}
       const r=tpImportGame(s,g,rep,sum||{},added);pm=pm||r.pmSeen;skipped+=r.skipped;teamPen+=r.teamPen;
+      if(isNew)nNew++;else nChk++;
     }
     s.tpAt=new Date().toISOString();
     if(pm&&!s.pm)s.pm=true;
-    const parts=[todo.length?(force?`${todo.length} matcher hämtades om`:`${todo.length} nya matcher`):"Inga nya matcher"];
-    if(added.length)parts.push(`${added.length} nya spelare`);
-    if(pm)parts.push("+/- finns med");
-    if(skipped)parts.push(`${skipped} mål utan målskytt hoppades över`);
-    if(teamPen)parts.push(`${teamPen} lagstraff räknas inte på någon spelare`);
-    if(s.tpHidden&&!done.length)parts.push("serien visar inte resultat");
+    const parts=[nNew?T(nNew+" nya matcher",nNew+" uutta ottelua"):T("Inga nya matcher","Ei uusia otteluita")];
+    if(nChk)parts.push(T(nChk+" kontrollerade",nChk+" tarkistettu"));
+    if(nSched)parts.push(T(nSched+" matcher från schemat, fyll i resultaten",nSched+" ottelua otteluohjelmasta, täytä tulokset"));
+    if(added.length)parts.push(T(added.length+" nya spelare",added.length+" uutta pelaajaa"));
+    if(pm)parts.push(T("+/- hämtades","+/- haettiin"));
+    if(skipped)parts.push(T(skipped+" mål utan målskytt hoppades över",skipped+" maalia ilman maalintekijää ohitettiin"));
+    if(teamPen)parts.push(T(teamPen+" lagstraff räknas inte på någon spelare",teamPen+" joukkuerangaistusta ei lasketa kenellekään"));
+    if(conf.length)parts.push(T(conf.length+" match(er) behöver ditt val",conf.length+" ottelua odottaa valintaasi"));
     toast(parts.join(" · ")+".");
   }catch(e){errMsg=e.message}
+  S.conflicts=S.conflicts.filter(c=>c.sid!==s.id).concat(conf);
   S.sync=null;
-  if(errMsg)toast(n>1?errMsg+" (Det som hann hämtas är sparat.)":errMsg);
-  changed();
+  if(errMsg)toast(n>1?errMsg+" "+T("(Det som hann hämtas är sparat.)","(Ehdityt tiedot on tallennettu.)"):errMsg);
+  changed(false);
+}
+function resolveConflict(i,choice){
+  const c=S.conflicts[i],s=cur();if(!c||c.sid!==s.id)return;
+  const m=s.matches.find(x=>x.id===c.mid),gid=c.g.GameID;
+  const take=o=>o.nores?tpScheduleGame(s,o.g):tpImportGame(s,o.g,o.rep,o.sum||{},[]);
+  if(choice==="mine")s.tpSkip.push(gid);
+  else if(choice==="link"&&m){m.gid=gid;tpScheduleGame(s,c.g)}
+  else{
+    if(choice==="tp"&&m){["goals","ga","pens"].forEach(k=>s[k]=s[k].filter(x=>x.mid!==m.id));s.matches=s.matches.filter(x=>x.id!==m.id)}
+    if(choice==="both"&&m)(m.notGid=m.notGid||[]).push(gid);
+    take(c);
+  }
+  S.conflicts.splice(i,1);
+  /* Andra krockar med en match som nu är borta: ta in tulospalvelus match direkt */
+  S.conflicts=S.conflicts.filter(o=>{if(o.sid!==s.id||s.matches.some(x=>x.id===o.mid&&!x.gid))return true;take(o);return false});
+  toast(T("Sparat.","Tallennettu."));changed();
 }
 
 function tpCard(){
   const s=cur();
-  if(!s.tp)return `<div class="card"><h2>Hämta automatiskt</h2><p class="note" style="margin:0 0 10px">Koppla laget till tulospalvelu.leijonat.fi så hämtas matcher, mål, assist och utvisningar med en knapp.</p><button class="btn primary" style="width:100%" data-a="lk-link">Koppla till tulospalvelu</button></div>`;
-  const when=s.tpAt?new Date(s.tpAt).toLocaleString("sv-SE",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"aldrig";
+  if(!s.tp)return `<div class="card"><h2>${T("Hämta automatiskt","Hae automaattisesti")}</h2><p class="note" style="margin:0 0 10px">${T("Koppla laget till tulospalvelu.leijonat.fi så hämtas matcher, mål, assist och utvisningar med en knapp.","Yhdistä joukkue tulospalvelu.leijonat.fi-palveluun, niin ottelut, maalit, syötöt ja jäähyt haetaan yhdellä painalluksella.")}</p><button class="btn primary" style="width:100%" data-a="lk-link">${T("Koppla till tulospalvelu","Yhdistä tulospalveluun")}</button></div>`;
+  const when=s.tpAt?new Date(s.tpAt).toLocaleString(loc(),{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):T("aldrig","ei koskaan");
   const next=(s.tpNext||[])[0];
-  return `<div class="card"><button class="btn primary big" data-a="tp-sync" ${S.sync?"disabled":""}>${S.sync?esc(S.sync.msg):"↻ Hämta matcher"}</button>
-    <p class="note">Från tulospalvelu · senast hämtat ${esc(when)}${next?`<br>Nästa: <b style="text-transform:capitalize">${esc(fmtDate(next.date,true))}</b> ${esc(next.time)} ${next.home?"hemma mot":"borta mot"} ${esc(next.opp)}`:""}</p></div>`;
+  return `<div class="card"><button class="btn primary big" data-a="tp-sync" ${S.sync?"disabled":""}>${S.sync?esc(S.sync.msg):T("↻ Hämta matcher","↻ Hae ottelut")}</button>
+    <p class="note">${T("Från tulospalvelu · senast hämtat","Tulospalvelusta · viimeksi haettu")} ${esc(when)}${next?`<br>${T("Nästa","Seuraava")}: <b style="text-transform:capitalize">${esc(fmtDate(next.date,true))}</b> ${esc(next.time)} ${next.home?T("hemma mot","kotona vastaan"):T("borta mot","vieraissa vastaan")} ${esc(next.opp)}`:""}
+    ${s.tpNores?`<br>${T("Serien visar inga resultat i tulospalvelu. Matcherna hämtas från schemat och ni fyller i slutresultatet själva.","Sarja ei näytä tuloksia tulospalvelussa. Ottelut haetaan otteluohjelmasta, ja lopputuloksen täytätte itse.")}`:""}</p></div>`;
 }
 
 /* Välj lag: säsong → nivå → distrikt → serie → lag */
@@ -614,17 +750,17 @@ function linkCard(){
   const L=S.link,sn=tpSeasonNow();
   const opt=(arr,v,l,sel,first)=>`<option value="">${first}</option>`+arr.map(x=>`<option value="${esc(x[v])}" ${String(x[v])===String(sel)?"selected":""}>${esc(x[l])}</option>`).join("");
   const seasons=[sn,sn-1,sn-2].map(y=>({y,t:(y-1)+"–"+y}));
-  return `<div class="card"><h2>${L.mode==="new"?"Nytt lag från tulospalvelu":"Koppla till tulospalvelu"}</h2>
-    <p class="note" style="margin:0 0 10px">Välj laget som det står i tulospalvelu.leijonat.fi. Spelarlistan hämtas och sedan alla spelade matcher.</p>
+  return `<div class="card"><h2>${L.mode==="new"?T("Nytt lag från tulospalvelu","Uusi joukkue tulospalvelusta"):T("Koppla till tulospalvelu","Yhdistä tulospalveluun")}</h2>
+    <p class="note" style="margin:0 0 10px">${T("Välj laget som det står i tulospalvelu.leijonat.fi. Truppen hämtas och sedan alla spelade matcher.","Valitse joukkue kuten se on tulospalvelu.leijonat.fi-palvelussa. Joukkue ja pelatut ottelut haetaan.")}</p>
     <div class="fields">
-      <label>Säsong<select class="in" id="lk-season">${seasons.map(x=>`<option value="${x.y}" ${String(x.y)===String(L.season)?"selected":""}>${x.t}</option>`).join("")}</select></label>
-      <label>Nivå<select class="in" id="lk-level" ${L.levels.length?"":"disabled"}>${opt(L.levels,"LevelID","LevelName",L.level,"Välj nivå")}</select></label>
-      <label class="wide">Distrikt<select class="in" id="lk-district" ${L.districts.length?"":"disabled"}>${opt(L.districts,"DistrictID","DistrictName",L.district,"Välj distrikt")}</select></label>
-      <label class="wide">Serie<select class="in" id="lk-sub" ${L.subs.length?"":"disabled"}>${opt(L.subs,"subSerieId","subSerieName",L.ssid,"Välj serie")}</select></label>
-      <label class="wide">Lag<select class="in" id="lk-team" ${L.teams.length?"":"disabled"}>${opt(L.teams,"TeamID","TeamAbbrv",L.tid,"Välj lag")}</select></label>
+      <label>${T("Säsong","Kausi")}<select class="in" id="lk-season">${seasons.map(x=>`<option value="${x.y}" ${String(x.y)===String(L.season)?"selected":""}>${x.t}</option>`).join("")}</select></label>
+      <label>${T("Nivå","Taso")}<select class="in" id="lk-level" ${L.levels.length?"":"disabled"}>${opt(L.levels,"LevelID","LevelName",L.level,T("Välj nivå","Valitse taso"))}</select></label>
+      <label class="wide">${T("Distrikt","Alue")}<select class="in" id="lk-district" ${L.districts.length?"":"disabled"}>${opt(L.districts,"DistrictID","DistrictName",L.district,T("Välj distrikt","Valitse alue"))}</select></label>
+      <label class="wide">${T("Serie","Sarja")}<select class="in" id="lk-sub" ${L.subs.length?"":"disabled"}>${opt(L.subs,"subSerieId","subSerieName",L.ssid,T("Välj serie","Valitse sarja"))}</select></label>
+      <label class="wide">${T("Lag","Joukkue")}<select class="in" id="lk-team" ${L.teams.length?"":"disabled"}>${opt(L.teams,"TeamID","TeamAbbrv",L.tid,T("Välj lag","Valitse joukkue"))}</select></label>
     </div>
-    ${L.busy?'<p class="note">Hämtar…</p>':""}${L.err?`<p class="warn">${esc(L.err)}</p>`:""}
-    <p style="display:flex;gap:8px;margin:12px 0 0"><button class="btn primary" data-a="lk-save" ${L.tid&&!L.busy?"":"disabled"}>${L.mode==="new"?"Skapa och hämta":"Koppla och hämta"}</button><button class="btn" data-a="lk-cancel">Avbryt</button></p></div>`;
+    ${L.busy?`<p class="note">${T("Hämtar…","Haetaan…")}</p>`:""}${L.err?`<p class="warn">${esc(L.err)}</p>`:""}
+    <p style="display:flex;gap:8px;margin:12px 0 0"><button class="btn primary" data-a="lk-save" ${L.tid&&!L.busy?"":"disabled"}>${L.mode==="new"?T("Skapa och hämta","Luo ja hae"):T("Koppla och hämta","Yhdistä ja hae")}</button><button class="btn" data-a="lk-cancel">${T("Avbryt","Peruuta")}</button></p></div>`;
 }
 async function linkSave(){
   const L=S.link;if(!L||!L.tid)return;
@@ -632,80 +768,87 @@ async function linkSave(){
   const tp_={season:Number(L.season),ssid:Number(L.ssid),tid:Number(L.tid),serieId:Number(L.serieId)||0};
   let s;
   if(L.mode==="new"){
-    s=newSeason(team.TeamAbbrv||"Lag",L.subName,(tp_.season-1)+"–"+tp_.season,[]);
+    s=newSeason(team.TeamAbbrv||T("Lag","Joukkue"),L.subName,(tp_.season-1)+"–"+tp_.season,[]);
     D.seasons.push(s);sid=s.id;LS.set("sid",sid);
   }else{
     s=cur();
-    if(s.tp&&s.tp.tid!==tp_.tid)s.matches.forEach(m=>{delete m.gid});
+    if(s.tp&&s.tp.tid!==tp_.tid){s.matches.forEach(m=>{if(m.gid){m.xgid=m.gid;delete m.gid;delete m.nores}});s.tpSkip=[]}
     if(!s.serie)s.serie=L.subName;
   }
   s.tp=tp_;
-  L.busy=true;render(true);
-  try{
-    const r=await tp("helpers/getteamserieroster",{season:tp_.season,teamid:tp_.tid,serieId:tp_.serieId,lang:"fi"});
-    (r.Players||[]).forEach(p=>tpPlayer(s,p.JerseyNr,tpName(p.FirstName,p.LastName),p.RoleAbbrv,null));
-  }catch(e){/* spelare läggs till från matcherna i stället */}
   S.link=null;S.tab="matcher";LS.set("tab",S.tab);persist();sync();
   await tpSync(false);
 }
 
 /* ---------- händelser i match ---------- */
-function openEditor(t,id){
+function openEditor(t,id,iceOnly){
   const s=cur();
   if(!id){S.ev={t,id:null,slot:0,pick:[null,null,null],ice:[],pid:null,min:2};return}
   const x=(t==="g"?s.goals:t==="ga"?s.ga:s.pens).find(y=>y.id===id);if(!x)return;
-  S.ev={t,id,slot:0,pick:[x.scorer||null,x.a1||null,x.a2||null],ice:(x.ice||[]).slice(),pid:x.pid||null,min:x.min||2};
+  S.ev={t,id,slot:0,pick:[x.scorer||null,x.a1||null,x.a2||null],ice:(x.ice||[]).slice(),pid:x.pid||null,min:x.min||2,iceOnly:!!iceOnly};
 }
 function saveEvent(){
   const e=S.ev,s=cur(),m=matchOf(S.mid);if(!e||!m)return;
+  if(e.iceOnly){
+    const x=(e.t==="g"?s.goals:s.ga).find(y=>y.id===e.id);if(!x)return;
+    x.ice=e.t==="g"?uniq([x.scorer,x.a1,x.a2,...e.ice]):uniq(e.ice);
+    S.ev=null;toast(T("Sparat.","Tallennettu."));changed();return;
+  }
+  if(locked(m))return;
   const isNew=!e.id,id=e.id||uid();
   let arr,obj,label;
   if(e.t==="g"){
     if(!e.pick[0])return;
-    const [sc,a1,a2]=e.pick;
-    const old=s.goals.find(x=>x.id===id);
+    const [sc,a1,a2]=e.pick,old=s.goals.find(x=>x.id===id);
     const ice=s.pm?uniq([sc,a1,a2,...e.ice]):(old?old.ice:[]);
     obj={id,mid:m.id,scorer:sc,a1:a1||null,a2:a2||null,ice,ts:old?old.ts:Date.now()};arr="goals";
     const as=[a1,a2].filter(Boolean).map(a=>"#"+(pById(a)||{}).nr).join(", ");
-    label="Mål: #"+(pById(sc)||{}).nr+" "+pname(sc)+(as?" (assist "+as+")":"");
+    label=T("Mål","Maali")+": #"+(pById(sc)||{}).nr+" "+pname(sc)+(as?" ("+T("assist","syöttö")+" "+as+")":"");
   }else if(e.t==="ga"){
     const old=s.ga.find(x=>x.id===id);
-    obj={id,mid:m.id,ice:s.pm?uniq(e.ice):(old?old.ice:[]),ts:old?old.ts:Date.now()};arr="ga";label="Insläppt mål";
+    obj={id,mid:m.id,ice:s.pm?uniq(e.ice):(old?old.ice:[]),ts:old?old.ts:Date.now()};arr="ga";label=T("Insläppt mål","Päästetty maali");
   }else{
     const min=Number(e.min);if(!e.pid||!(min>0))return;
     const old=s.pens.find(x=>x.id===id);
-    obj={id,mid:m.id,pid:e.pid,min,ts:old?old.ts:Date.now()};arr="pens";label="Utvisning: #"+(pById(e.pid)||{}).nr+" "+pname(e.pid)+", "+min+" min";
+    obj={id,mid:m.id,pid:e.pid,min,ts:old?old.ts:Date.now()};arr="pens";label=T("Utvisning","Jäähy")+": #"+(pById(e.pid)||{}).nr+" "+pname(e.pid)+", "+min+" min";
   }
   s[arr]=s[arr].filter(x=>x.id!==id).concat(obj);
   S.ev=null;
-  toast((isNew?"Sparat. ":"Ändrat. ")+label,isNew?()=>{cur()[arr]=cur()[arr].filter(x=>x.id!==id);changed()}:null);
+  toast((isNew?T("Sparat. ","Tallennettu. "):T("Ändrat. ","Muutettu. "))+label,isNew?()=>{cur()[arr]=cur()[arr].filter(x=>x.id!==id);changed()}:null);
   changed();
 }
 function saveMatch(){
-  const f=S.mform,s=cur();if(!f||!f.sel.length)return;
+  const f=S.mform,s=cur();if(!f)return;
+  const rf=String(f.rf).trim(),ra=String(f.ra).trim();
+  const res=rf!==""&&ra!==""&&Number(rf)>=0&&Number(ra)>=0?[Number(rf),Number(ra)]:null;
   if(f.id){
-    const m=s.matches.find(x=>x.id===f.id);if(!m)return;
+    const m=s.matches.find(x=>x.id===f.id);if(!m||locked(m))return;
     const need=uniq([...s.goals.filter(x=>x.mid===m.id).flatMap(x=>[x.scorer,x.a1,x.a2,...x.ice]),...s.ga.filter(x=>x.mid===m.id).flatMap(x=>x.ice),...s.pens.filter(x=>x.mid===m.id).map(x=>x.pid)]);
     const kept=need.filter(id=>!f.sel.includes(id)&&pById(id));
-    m.date=f.date;m.opp=f.opp.trim();m.players=uniq([...f.sel,...kept]);delete m.auto;
-    toast(kept.length?"Sparat. Nr "+nrs(kept)+" behölls eftersom de har statistik i matchen.":"Matchen är sparad.");
+    if(!m.gid){m.date=f.date;m.opp=f.opp.trim();m.type=f.type}
+    m.players=uniq([...f.sel,...kept]);
+    if(res)m.res=res;else delete m.res;
+    toast(kept.length?T("Sparat. Nr "+nrs(kept)+" behölls eftersom de har statistik i matchen.","Tallennettu. Nro "+nrs(kept)+" säilytettiin, koska heillä on tilastoja ottelussa."):T("Matchen är sparad.","Ottelu on tallennettu."));
   }else{
-    const m={id:uid(),date:f.date,opp:f.opp.trim(),players:uniq(f.sel),ts:Date.now()};
-    s.matches.push(m);setMid(m.id);toast("Matchen är skapad. Lägg nu in mål och utvisningar.");
+    const m={id:uid(),date:f.date,opp:f.opp.trim(),type:f.type,players:uniq(f.sel),ts:Date.now()};
+    if(res)m.res=res;
+    s.matches.push(m);setMid(m.id);toast(T("Matchen är skapad.","Ottelu on luotu."));
   }
   S.mform=null;changed();window.scrollTo(0,0);
 }
 function shareText(){
-  const s=cur(),rows=leaderboard(),k=statKey();
-  const v=r=>(k==="pts"?r.pts+" p ("+r.g+"+"+r.a+")":k==="g"?r.g+" mål":k==="a"?r.a+" assist":k==="u"?r.u+" min":fmtPM(r.pm))+", "+r.gp+" m";
-  return [s.lag+" · "+TITLES[k],[s.serie,s.sasong].filter(Boolean).join(" · "),"",...rows.map(r=>r.rank+". "+r.p.name+" (#"+r.p.nr+") "+v(r))].join("\n");
+  const s=cur(),rows=leaderboard(),k=statKey(),fl=filterLabel();
+  const v=r=>(k==="pts"?r.pts+" p ("+r.g+"+"+r.a+")":k==="g"?r.g+" "+T("mål","maalia"):k==="a"?r.a+" "+T("assist","syöttöä"):k==="u"?r.u+" min":fmtPM(r.pm))+", "+r.gp+" "+T("m","o");
+  return [s.lag+" · "+TITLES()[k],[s.serie,s.sasong,fl].filter(Boolean).join(" · "),"",...rows.map(r=>r.rank+". "+r.p.name+" (#"+r.p.nr+") "+v(r))].join("\n");
 }
 async function copyText(){
   const t=shareText();
-  try{await navigator.clipboard.writeText(t);toast("Texten är kopierad. Klistra in i WhatsApp.");render(true)}
-  catch(e){toast("Kopiering blockerades. Markera texten nedan och kopiera manuellt.");render(true);
+  try{await navigator.clipboard.writeText(t);toast(T("Texten är kopierad. Klistra in i WhatsApp.","Teksti on kopioitu. Liitä se WhatsAppiin."));render(true)}
+  catch(e){toast(T("Kopiering blockerades. Markera texten nedan och kopiera manuellt.","Kopiointi estettiin. Valitse teksti alta ja kopioi käsin."));render(true);
     const ta=document.createElement("textarea");ta.value=t;ta.className="in";ta.rows=10;ta.style.marginTop="12px";ta.readOnly=true;$("#app").insertBefore(ta,$(".nav"));ta.focus();ta.select()}
 }
+
+/* ---------- klick och inmatning ---------- */
 document.addEventListener("click",ev=>{
   const el=ev.target.closest("[data-a]");if(!el)return;
   const a=el.dataset.a,d=el.dataset;
@@ -713,27 +856,33 @@ document.addEventListener("click",ev=>{
   if(a==="closesheet"&&ev.target.closest(".sheet")&&!ev.target.closest("button[data-a=closesheet]"))return;
   const s=cur(),e=S.ev,f=S.mform;
   switch(a){
+    case"lang":LANG=d.v;LS.set("lang",LANG);render(true);break;
     case"tab":go(()=>{if(S.tab===d.v&&d.v==="matcher"){setMid(null);S.ev=null;S.mform=null}if(S.tab!==d.v)S.link=null;S.tab=d.v;LS.set("tab",S.tab);S.shot=false;S.edit=null;S.csvText=null;S.sheet=false});break;
     case"stat":S.stat=d.v;LS.set("stat",S.stat);render(true);break;
     case"shot":S.shot=true;render(true);window.scrollTo(0,0);break;
     case"unshot":S.shot=false;render(true);break;
     case"copy":copyText();break;
     /* matcher */
-    case"m-new":go(()=>{S.mform={id:null,date:today(),opp:"",sel:[]}});break;
+    case"m-new":go(()=>{S.mform={id:null,date:today(),opp:"",type:"tr",sel:[],rf:"",ra:""}});break;
     case"m-open":go(()=>{setMid(d.id);S.ev=null});break;
     case"m-back":go(()=>{setMid(null);S.ev=null});break;
     case"m-del":{const m=matchOf(S.mid);if(!m||!confirmTwice("m:"+m.id))break;
+      if(m.gid)s.tpSkip.push(m.gid);
       ["goals","ga","pens"].forEach(k=>s[k]=s[k].filter(x=>x.mid!==m.id));s.matches=s.matches.filter(x=>x.id!==m.id);
-      setMid(null);S.ev=null;toast("Matchen är borttagen.");changed();window.scrollTo(0,0);break}
-    case"mf-edit":go(()=>{const m=matchOf(S.mid);if(m)S.mform={id:m.id,date:m.date||"",opp:m.opp||"",sel:m.players.slice()};S.ev=null});break;
+      setMid(null);S.ev=null;toast(m.gid?T("Matchen är borttagen och hämtas inte igen.","Ottelu on poistettu, eikä sitä haeta uudelleen."):T("Matchen är borttagen.","Ottelu on poistettu."));changed();window.scrollTo(0,0);break}
+    case"m-detach":{const m=matchOf(S.mid);if(!m||!m.gid||!confirmTwice("d:"+m.id))break;
+      s.tpSkip.push(m.gid);m.xgid=m.gid;delete m.gid;delete m.nores;S.ev=null;
+      toast(T("Matchen är bortkopplad och kan nu ändras fritt.","Ottelu on irrotettu, ja sitä voi nyt muokata vapaasti."));changed();break}
+    case"mf-edit":go(()=>{const m=matchOf(S.mid);if(m&&!locked(m)){const r=Array.isArray(m.res)?m.res:["",""];S.mform={id:m.id,date:m.date||"",opp:m.opp||"",type:mtype(m),sel:m.players.slice(),rf:r[0],ra:r[1]}}S.ev=null});break;
     case"mf-cancel":go(()=>{S.mform=null});break;
     case"mf-tog":f.sel=f.sel.includes(d.id)?f.sel.filter(x=>x!==d.id):f.sel.concat(d.id);render(true);break;
-    case"mf-all":f.sel=players.map(p=>p.id);render(true);break;
+    case"mf-all":f.sel=vis().map(p=>p.id);render(true);break;
     case"mf-none":f.sel=[];render(true);break;
     case"mf-last":{const m=matchOf(d.id);if(m)f.sel=m.players.filter(id=>pById(id));render(true);break}
     case"mf-save":saveMatch();break;
     case"ev-new":openEditor(d.t);render(true);break;
     case"ev-edit":openEditor(d.t,d.id);render(true);{const ed=$(".editor");if(ed)ed.scrollIntoView({block:"start"})}break;
+    case"ev-ice-edit":openEditor(d.t,d.id,true);render(true);{const ed=$(".editor");if(ed)ed.scrollIntoView({block:"start"})}break;
     case"ev-cancel":S.ev=null;render(true);break;
     case"ev-save":saveEvent();break;
     case"slot":e.slot=Number(d.i);render(true);break;
@@ -750,62 +899,71 @@ document.addEventListener("click",ev=>{
     case"min":e.min=Number(d.v);render(true);break;
     case"undo":{const u=S.toast&&S.toast.undo;S.toast=null;if(u)u();else render(true);break}
     case"del":{
+      const m=matchOf(S.mid);if(m&&locked(m))break;
       if(!confirmTwice(d.t+":"+d.id))break;
       const k=d.t==="g"?"goals":d.t==="ga"?"ga":"pens";s[k]=s[k].filter(x=>x.id!==d.id);
       if(S.ev&&S.ev.id===d.id)S.ev=null;changed();break}
+    case"cf":resolveConflict(Number(d.i),d.v);break;
     /* spelare */
     case"padd":{
       const nr=parseInt(val("n-nr"),10),name=val("n-name").trim(),pos=val("n-pos")||"UP";
-      if(isNaN(nr)||!name){toast("Fyll i nummer och namn.");render(true);break}
-      if(players.some(p=>Number(p.nr)===nr)){toast("Nummer "+nr+" används redan.");render(true);break}
-      s.players.push({id:uid(),nr,name,pos});toast("Spelare tillagd: #"+nr+" "+name);changed();break}
+      if(isNaN(nr)||!name){toast(T("Fyll i nummer och namn.","Täytä numero ja nimi."));render(true);break}
+      if(players.some(p=>Number(p.nr)===nr)){toast(T("Nummer "+nr+" används redan.","Numero "+nr+" on jo käytössä."));render(true);break}
+      s.players.push({id:uid(),nr,name,pos});toast(T("Spelare tillagd: #","Pelaaja lisätty: #")+nr+" "+name);changed();break}
     case"pedit":S.edit=d.id;render(true);break;
     case"pcancel":S.edit=null;render(true);break;
     case"psave":{
-      const nr=parseInt(val("e-nr"),10),name=val("e-name").trim(),pos=val("e-pos")||"UP";
-      if(isNaN(nr)||!name){toast("Fyll i nummer och namn.");render(true);break}
-      if(players.some(p=>p.id!==d.id&&Number(p.nr)===nr)){toast("Nummer "+nr+" används redan.");render(true);break}
-      const p=s.players.find(x=>x.id===d.id);if(p){p.nr=nr;p.name=name;p.pos=pos}
-      S.edit=null;changed();break}
+      const p=s.players.find(x=>x.id===d.id);if(!p)break;
+      const name=val("e-name").trim(),pos=val("e-pos")||"UP";
+      if(!name){toast(T("Fyll i namnet.","Täytä nimi."));render(true);break}
+      if(!p.tpid){
+        const nr=parseInt(val("e-nr"),10);
+        if(isNaN(nr)){toast(T("Fyll i nummer.","Täytä numero."));render(true);break}
+        if(players.some(x=>x.id!==d.id&&Number(x.nr)===nr)){toast(T("Nummer "+nr+" används redan.","Numero "+nr+" on jo käytössä."));render(true);break}
+        p.nr=nr;
+      }
+      p.name=name;p.pos=pos;S.edit=null;changed();break}
+    case"phide":{const p=s.players.find(x=>x.id===d.id);if(p){if(p.hide)delete p.hide;else p.hide=true}changed();break}
     case"pdel":{
-      if(!confirmTwice("p:"+d.id))break;
+      {const p=s.players.find(x=>x.id===d.id);if(!p||p.tpid||!confirmTwice("p:"+d.id))break}
       s.players=s.players.filter(p=>p.id!==d.id);
       s.matches.forEach(m=>m.players=m.players.filter(x=>x!==d.id));[...s.goals,...s.ga].forEach(x=>x.ice=x.ice.filter(y=>y!==d.id));
-      toast("Spelaren är borttagen. Hens mål och utvisningar visas som Okänd spelare.");changed();break}
+      toast(T("Spelaren är borttagen.","Pelaaja on poistettu."));changed();break}
     /* säsong */
     case"sheet":S.sheet=true;render(true);break;
     case"closesheet":S.sheet=false;render(true);break;
     case"season":switchSeason(d.id);break;
     case"esave":{
-      const lag=val("es-lag").trim();if(!lag){toast("Ange lagets namn.");render(true);break}
+      const lag=val("es-lag").trim();if(!lag){toast(T("Ange lagets namn.","Anna joukkueen nimi."));render(true);break}
       s.lag=lag;s.serie=val("es-serie").trim();s.sasong=val("es-sas").trim();
-      S.sheet=false;toast("Uppgifterna är sparade.");changed();break}
+      S.sheet=false;toast(T("Uppgifterna är sparade.","Tiedot on tallennettu."));changed();break}
     case"sdel":{
       if(!s||!confirmTwice("s:"+s.id))break;
       D.seasons=D.seasons.filter(x=>x.id!==s.id);
       sid=D.seasons[0]?D.seasons[0].id:null;LS.set("sid",sid);S.sheet=false;setMid(null);
-      toast("Säsongen är borttagen.");changed();break}
+      toast(T("Säsongen är borttagen.","Kausi on poistettu."));changed();break}
     case"newseason":{
-      const lag=val("ns-lag").trim();if(!lag){toast("Ange lagets namn.");render(true);break}
+      const lag=val("ns-lag").trim();if(!lag){toast(T("Ange lagets namn.","Anna joukkueen nimi."));render(true);break}
       const copy=document.getElementById("ns-copy"),old=copy&&copy.checked?players.slice():[];
       const n=newSeason(lag,val("ns-serie").trim(),val("ns-sas").trim(),old.map(p=>({id:uid(),nr:p.nr,name:p.name,pos:p.pos||"UP"})));
       if(s&&copy)n.pm=s.pm;
       D.seasons.push(n);LS.set("sid",n.id);sid=n.id;S.sheet=false;S.ev=null;S.mform=null;setMid(null);
-      toast("Ny säsong skapad.");changed();break}
+      toast(T("Nytt lag skapat.","Uusi joukkue luotu."));changed();break}
     /* tulospalvelu */
     case"tp-sync":tpSync(false);break;
-    case"tp-force":if(confirmTwice("tpforce"))tpSync(true);break;
-    case"tp-unlink":if(!confirmTwice("tpunlink"))break;delete s.tp;delete s.tpNext;delete s.tpAt;toast("Säsongen är bortkopplad från tulospalvelu.");changed();break;
+    case"tp-full":tpSync(true);break;
+    case"tp-unskip":if(!confirmTwice("unskip"))break;s.tpSkip=[];s.matches.forEach(m=>{delete m.notGid});toast(T("Tryck på Hämta matcher för att hämta dem.","Hae ne painamalla Hae ottelut."));changed();break;
+    case"tp-unlink":if(!confirmTwice("tpunlink"))break;delete s.tp;delete s.tpNext;delete s.tpAt;delete s.tpNores;s.matches.forEach(m=>{if(m.gid){m.xgid=m.gid;delete m.gid;delete m.nores}});toast(T("Säsongen är bortkopplad från tulospalvelu.","Kauden yhteys tulospalveluun on poistettu."));changed();break;
     case"lk-new":openLink("new");break;
     case"lk-link":openLink("link");break;
     case"lk-cancel":go(()=>{S.link=null});break;
     case"lk-save":linkSave();break;
     case"px-save":{
       const v=val("px").trim();
-      if(v&&!/^https?:\/\//i.test(v)){toast("Adressen ska börja med https://");render(true);break}
+      if(v&&!/^https?:\/\//i.test(v)){toast(T("Adressen ska börja med https://","Osoitteen pitää alkaa https://"));render(true);break}
       LS.set("proxy",v);
-      tp("helpers/getlevels",{season:tpSeasonNow()}).then(r=>{toast(Array.isArray(r)&&r.length?"Anslutningen fungerar.":"Svaret var tomt. Kontrollera adressen.");render(true)},e=>{toast(e.message);render(true)});
-      toast("Testar anslutningen…");render(true);break}
+      tp("helpers/getlevels",{season:tpSeasonNow()}).then(r=>{toast(Array.isArray(r)&&r.length?T("Anslutningen fungerar.","Yhteys toimii."):T("Svaret var tomt. Kontrollera adressen.","Vastaus oli tyhjä. Tarkista osoite."));render(true)},er=>{toast(er.message);render(true)});
+      toast(T("Testar anslutningen…","Testataan yhteyttä…"));render(true);break}
     /* data */
     case"exp-dl":exportDownload();break;
     case"exp-share":exportShare();break;
@@ -813,24 +971,29 @@ document.addEventListener("click",ev=>{
     case"imp-do":{
       if(!S.imp||S.imp.error||!confirmTwice("imp"))break;
       D={v:2,last:new Date().toISOString(),changes:0,seasons:S.imp.seasons};
-      const c=S.imp.counts;S.imp=null;S.ev=null;S.mform=null;setMid(null);
+      const c=S.imp.counts;S.imp=null;S.ev=null;S.mform=null;S.conflicts=[];setMid(null);
       sid=D.seasons[0].id;LS.set("sid",sid);persist();sync();
-      toast("Importerade "+c.players+" spelare, "+c.matches+" matcher, "+c.goals+" mål och "+c.pens+" utvisningar.");render(true);break}
+      toast(T(`Importerade ${c.players} spelare, ${c.matches} matcher, ${c.goals} mål och ${c.pens} utvisningar.`,`Tuotiin ${c.players} pelaajaa, ${c.matches} ottelua, ${c.goals} maalia ja ${c.pens} jäähyä.`));render(true);break}
   }
 });
 document.addEventListener("input",ev=>{
-  const t=ev.target;
-  if(t.id==="mf-date"&&S.mform)S.mform.date=t.value;
-  else if(t.id==="mf-opp"&&S.mform)S.mform.opp=t.value;
+  const t=ev.target,f=S.mform;
+  if(f&&t.id==="mf-date")f.date=t.value;
+  else if(f&&t.id==="mf-opp")f.opp=t.value;
+  else if(f&&t.id==="mf-rf")f.rf=t.value;
+  else if(f&&t.id==="mf-ra")f.ra=t.value;
   else if(t.id==="ev-min"&&S.ev)S.ev.min=Number(t.value)||0;
 });
 document.addEventListener("change",async ev=>{
   const t=ev.target;
   if(t.id==="topn"){S.top=t.value;LS.set("top",S.top);t.blur();render(true)}
+  else if(t.id==="f-type"){S.ftype=t.value;LS.set("ftype",S.ftype);t.blur();render(true)}
+  else if(t.id==="f-per"){S.fper=t.value;LS.set("fper",S.fper);t.blur();render(true)}
   else if(t.id==="hide"){S.hide=t.checked;LS.set("hide",S.hide);t.blur();render(true)}
-  else if(t.id==="pm-toggle"){cur().pm=t.checked;toast(t.checked?"+/- är påslaget för den här säsongen.":"+/- är avstängt. Inmatad data sparas ändå.");changed()}
+  else if(t.id==="pm-toggle"){cur().pm=t.checked;toast(t.checked?T("+/- är påslaget.","+/- on käytössä."):T("+/- är avstängt. Inmatad data sparas ändå.","+/- ei ole käytössä. Kirjatut tiedot säilyvät."));changed()}
+  else if(t.id==="mf-type"&&S.mform){S.mform.type=t.value;t.blur()}
   else if(t.id==="ev-min"){if(S.ev)S.ev.min=Number(t.value)||0;t.blur();render(true)}
-  else if(t.id==="mf-date"||t.id==="mf-opp"){t.blur()}
+  else if(/^mf-(date|opp|rf|ra)$/.test(t.id)){t.blur()}
   else if(/^lk-/.test(t.id)&&S.link){
     const L=S.link,v=t.value;t.blur();
     if(t.id==="lk-season"){L.season=Number(v);lkLoad("season")}
@@ -841,7 +1004,7 @@ document.addEventListener("change",async ev=>{
   }
   else if(t.id==="imp-file"){
     const fl=t.files&&t.files[0];if(!fl)return;
-    try{const r=parseImport(await readFile(fl));S.imp={name:fl.name,...r}}catch(e){S.imp={name:fl.name,error:"Filen kunde inte läsas."}}
+    try{const r=parseImport(await readFile(fl));S.imp={name:fl.name,...r}}catch(e){S.imp={name:fl.name,error:T("Filen kunde inte läsas.","Tiedostoa ei voitu lukea.")}}
     S.confirm=null;render(true);
   }
 });

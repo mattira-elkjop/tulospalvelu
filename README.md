@@ -1,34 +1,22 @@
-# Lagets poängliga
+# Lagets poängliga / Joukkueen pistepörssi
 
-Intern poängliga för ett juniorhockeylag. Appen hämtar matcher, mål, assist, utvisningar och deltagare direkt från [tulospalvelu.leijonat.fi](https://tulospalvelu.leijonat.fi) med en knapp, och visar listor för poäng, mål, assist, utvisningsminuter och +/- som är gjorda för att skärmdumpas till lagets WhatsApp-grupp. Matcher kan också läggas in och ändras för hand.
+Intern poängliga för juniorhockeylag, på svenska och finska. Appen hämtar matcher, mål, assist, utvisningar, deltagare och +/- direkt från [tulospalvelu.leijonat.fi](https://tulospalvelu.leijonat.fi) med en knapp, och visar listor gjorda för att skärmdumpas till lagets WhatsApp-grupp.
 
-Allt ligger i en enda HTML-fil. Datan sparas i webbläsaren (localStorage) och kan exporteras och importeras som CSV.
+**Öppna appen:** https://mattira-elkjop.github.io/tulospalvelu/
 
-## Kom igång lokalt
+- **Seriematcher** hämtas automatiskt och är låsta, så att de alltid stämmer med tulospalvelu. +/- kan fyllas i för hand där serien inte för det.
+- **Träningsmatcher och turneringar** läggs till för hand. Listorna kan filtreras på matchtyp och period.
+- **Serier utan resultat** (t.ex. U10 Leijonaliiga) hämtas från spelschemat, och ni fyller i slutresultatet själva.
+- Datan sparas i webbläsaren och kan exporteras och importeras som CSV.
 
-```
-node proxy/server.js
-```
-
-Öppna sedan http://localhost:8787. Inga beroenden behövs, bara Node 18 eller nyare.
-
-## Varför en proxy?
-
-tulospalvelu.leijonat.fi har inget officiellt API. Appen använder samma öppna JSON-anrop som webbsidan, men tjänsten tillåter inte anrop från andra webbsidor (CORS). Därför går anropen via en liten proxy:
-
-- **Lokalt:** `proxy/server.js` (se ovan).
-- **På telefonen:** lägg ut `proxy/worker.js` som en gratis [Cloudflare Worker](https://dash.cloudflare.com) (Workers & Pages → Create → Worker → klistra in → Deploy). Klistra in Worker-adressen i appen under **Data → Anslutning**, eller i `TP_DEFAULT_PROXY` i `src/filapp/app.js` så att alla får den automatiskt. Appen använder redan en driftsatt Worker som standard, så ingen inställning behövs.
-
-Anropen är odokumenterade och kan sluta fungera om tjänsten ändras.
-
-## Ändra i appen
-
-Logiken finns i `src/filapp/app.js`. Kör efter ändringar:
+## Utveckling
 
 ```
-python src/filapp/build.py
+node proxy/server.js          # appen på http://localhost:8787
+python src/filapp/build.py    # bygger HTML-filen och index.html från src/filapp/app.js
+node --test test/             # tester
 ```
 
-Det bygger `src/filapp/Lagets_poangliga.html` (filen som delas) och `index.html` (för GitHub Pages).
+Tulospalvelu har inget officiellt API och tillåter inte anrop från andra webbsidor (CORS). Därför går anropen via en liten proxy, [proxy/worker.js](proxy/worker.js), som körs som en gratis Cloudflare Worker. Anropen är odokumenterade och kan sluta fungera om tjänsten ändras.
 
-Mer om datamodell, CSV-format och hur hämtningen fungerar finns i [CLAUDE.md](CLAUDE.md).
+Datamodell, regler och hur hämtningen fungerar finns i [CLAUDE.md](CLAUDE.md).
