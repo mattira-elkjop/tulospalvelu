@@ -17,7 +17,7 @@ node proxy/server.js
 tulospalvelu.leijonat.fi har inget officiellt API. Appen använder samma öppna JSON-anrop som webbsidan, men tjänsten tillåter inte anrop från andra webbsidor (CORS). Därför går anropen via en liten proxy:
 
 - **Lokalt:** `proxy/server.js` (se ovan).
-- **På telefonen:** lägg ut `proxy/worker.js` som en gratis [Cloudflare Worker](https://dash.cloudflare.com) (Workers & Pages → Create → Worker → klistra in → Deploy). Klistra in Worker-adressen i appen under **Data → Anslutning**, eller i `TP_DEFAULT_PROXY` i `src/filapp/app.js` så att alla får den automatiskt.
+- **På telefonen:** lägg ut `proxy/worker.js` som en gratis [Cloudflare Worker](https://dash.cloudflare.com) (Workers & Pages → Create → Worker → klistra in → Deploy). Klistra in Worker-adressen i appen under **Data → Anslutning**, eller i `TP_DEFAULT_PROXY` i `src/filapp/app.js` så att alla får den automatiskt. Appen använder redan en driftsatt Worker som standard, så ingen inställning behövs.
 
 Anropen är odokumenterade och kan sluta fungera om tjänsten ändras.
 

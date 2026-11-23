@@ -124,7 +124,7 @@ tulospalvelu.leijonat.fi har inget officiellt API, men webbsidorna hämtar data 
 MIF U13: `season=2027, subSerieId=4378, teamId=1368627176, serieId=1787`.
 
 **CORS:** tjänsten skickar inga CORS-headers, så webbläsaren blockerar direkta anrop (även från en lokal fil). Publika CORS-proxyer (corsproxy.io m.fl.) kräver numera nyckel eller fungerar inte. Därför:
-- `proxy/worker.js`: Cloudflare Worker (gratis), släpper bara igenom endpointsen ovan och lägger till CORS. Adressen klistras in i appen under Data → Anslutning (sparas i `lp_proxy`) eller i konstanten `TP_DEFAULT_PROXY` i `app.js`.
+- `proxy/worker.js`: Cloudflare Worker (gratis), släpper bara igenom endpointsen ovan och lägger till CORS. **Driftsatt på https://tulospalvelu-proxy.matti-rantakangas.workers.dev/** (inlagd i `TP_DEFAULT_PROXY`, verifierad 2026-11-23). Koden i Cloudflare uppdateras inte automatiskt från repot: ändras `worker.js` måste den klistras in och driftsättas igen i Cloudflare-panelen. Adressen klistras in i appen under Data → Anslutning (sparas i `lp_proxy`) eller i konstanten `TP_DEFAULT_PROXY` i `app.js`.
 - `proxy/server.js`: lokal Node-server utan beroenden, serverar appen på http://localhost:8787 och proxar `/api/...`. Används för utveckling och test.
 - `tpBase()` väljer i ordningen: inställd proxy → `TP_DEFAULT_PROXY` → `<origin>/api/` (om sidan körs över http) → direkt (fungerar inte p.g.a. CORS, ger ett felmeddelande som pekar på Data → Anslutning).
 

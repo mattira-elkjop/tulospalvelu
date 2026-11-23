@@ -460,7 +460,7 @@ async function readFile(file){
    CORS-headers, så anropen måste gå via en proxy (proxy/worker.js eller proxy/server.js).
    Fyll i TP_DEFAULT_PROXY med Worker-adressen så slipper användarna ställa in den själva. */
 const TP_SITE="https://tulospalvelu.leijonat.fi/";
-const TP_DEFAULT_PROXY="";
+const TP_DEFAULT_PROXY="https://tulospalvelu-proxy.matti-rantakangas.workers.dev/";
 function tpBase(){
   const p=String(LS.get("proxy","")||TP_DEFAULT_PROXY).trim();
   if(p)return p.replace(/\/*$/,"/");
