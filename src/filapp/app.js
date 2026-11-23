@@ -1,0 +1,590 @@
+"use strict";
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const LS={get(k,d){try{const v=localStorage.getItem("lp_"+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem("lp_"+k,JSON.stringify(v))}catch(e){}}};
+const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
+const uid=()=>"x"+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+const uniq=a=>[...new Set(a.filter(Boolean))];
+const TITLES={pts:"Poängliga",g:"Målliga",a:"Assistliga",u:"Utvisningsliga",pm:"Plus/minus"};
+
+/* ---------- lagring (localStorage på den här enheten) ---------- */
+const KEY="lp_data_v1";
+let storageOK=true;
+const SEED=[]; /* Inga namn i koden: spelarna hämtas från tulospalvelu. */
+function newSeason(lag,serie,sasong,players,created){return {id:uid(),lag,serie:serie||"",sasong:sasong||"",created:created||Date.now(),pm:false,players:players||[],matches:[],goals:[],ga:[],pens:[]}}
+function seedData(){return {v:2,last:null,changes:0,seasons:[newSeason("MIF","U13 Valkoinen, lohko 3b","2026–2027",SEED.map(([nr,name])=>({id:uid(),nr,name,pos:nr>=90?"MV":"UP"})),1)]}}
+/* Gör om äldre data (mål utan match) till matcher. Deltagare = alla som har statistik i matchen. */
+function migrateSeason(s){
+  s.players=s.players||[];s.goals=s.goals||[];s.pens=s.pens||[];s.ga=s.ga||[];s.pm=!!s.pm;
+  if(!Array.isArray(s.matches))s.matches=[];
+  const ids=new Set(s.matches.map(m=>m.id));
+  const orphan=[...s.goals,...s.pens,...s.ga].filter(e=>!e.mid||!ids.has(e.mid));
+  const groups=new Map();
+  orphan.forEach(e=>{const k=(e.date||"")+"\u0001"+(e.opp||"");if(!groups.has(k))groups.set(k,[]);groups.get(k).push(e)});
+  groups.forEach((list,k)=>{
+    const [date,opp]=k.split("\u0001");
+    const m={id:uid(),date,opp,players:[],ts:Math.min(...list.map(e=>e.ts||0)),auto:true};
+    list.forEach(e=>{e.mid=m.id;delete e.date;delete e.opp});
+    s.matches.push(m);
+  });
+  s.goals.forEach(g=>{g.ice=Array.isArray(g.ice)?g.ice:[]});s.ga.forEach(x=>{x.ice=Array.isArray(x.ice)?x.ice:[]});
+  s.matches.forEach(m=>{m.players=uniq(Array.isArray(m.players)?m.players:[])});
+  const need=[...s.goals.map(g=>[g.mid,[g.scorer,g.a1,g.a2,...g.ice]]),...s.pens.map(p=>[p.mid,[p.pid]]),...s.ga.map(x=>[x.mid,x.ice])];
+  need.forEach(([mid,list])=>{const m=s.matches.find(x=>x.id===mid);if(m)list.filter(Boolean).forEach(id=>{if(!m.players.includes(id))m.players.push(id)})});
+  return s;
+}
+function loadData(){
+  try{localStorage.setItem(KEY+"_t","1");localStorage.removeItem(KEY+"_t")}catch(e){storageOK=false}
+  try{const r=localStorage.getItem(KEY);if(r){const d=JSON.parse(r);if(d&&Array.isArray(d.seasons)){d.changes=d.changes||0;d.seasons.forEach(migrateSeason);d.v=2;return d}}}catch(e){}
+  return seedData();
+}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(D))}catch(e){storageOK=false}}
+let D=loadData();persist();
+let sid=LS.get("sid",null);
+if(!D.seasons.find(s=>s.id===sid))sid=D.seasons[0]?D.seasons[0].id:null;
+let players=[],toastTimer=null;
+const S={
+  tab:LS.get("tab","lista"),stat:LS.get("stat","pts"),top:LS.get("top","alla"),hide:LS.get("hide",true),shot:false,
+  mid:LS.get("mid",null),mform:null,ev:null,edit:null,sheet:false,toast:null,confirm:null,pending:false,imp:null,csvText:null
+};
+if(S.tab==="add"||S.tab==="hist")S.tab="matcher";
+const cur=()=>D.seasons.find(s=>s.id===sid);
+const nrCmp=(a,b)=>(Number(a.nr)||0)-(Number(b.nr)||0);
+function sync(){const s=cur();players=s?s.players.slice().sort(nrCmp):[]}
+function changed(){D.changes=(D.changes||0)+1;persist();sync();render(true)}
+const pById=id=>players.find(p=>p.id===id);
+const pname=id=>{const p=pById(id);return p?p.name:"Okänd spelare"};
+const plabel=id=>{const p=pById(id);return p?"#"+p.nr+" "+p.name:"Okänd spelare"};
+const short=n=>{const w=String(n||"").trim().split(/\s+/);return w.length>1?w[0][0]+". "+w[w.length-1]:w[0]||""};
+const nrs=ids=>ids.map(pById).filter(Boolean).sort(nrCmp).map(p=>p.nr).join(", ");
+const matchOf=id=>{const s=cur();return s?s.matches.find(m=>m.id===id):null};
+const evOf=m=>{const s=cur();return [...s.goals.filter(x=>x.mid===m.id).map(x=>({t:"g",x})),...s.ga.filter(x=>x.mid===m.id).map(x=>({t:"ga",x})),...s.pens.filter(x=>x.mid===m.id).map(x=>({t:"u",x}))].sort((a,b)=>(a.x.ts||0)-(b.x.ts||0))};
+const score=m=>{const s=cur();return [s.goals.filter(x=>x.mid===m.id).length,s.ga.filter(x=>x.mid===m.id).length]};
+const sortedMatches=()=>cur().matches.slice().sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))||(b.ts||0)-(a.ts||0));
+function fmtDate(d,shortForm){
+  if(!d)return "Utan datum";
+  try{return new Date(d+"T12:00:00").toLocaleDateString("sv-SE",shortForm?{weekday:"short",day:"numeric",month:"short"}:{weekday:"long",day:"numeric",month:"long",year:"numeric"})}catch(e){return d}
+}
+
+/* ---------- statistik ---------- */
+function computeStats(){
+  const s=cur(),m=new Map(players.map(p=>[p.id,{p,gp:0,g:0,a:0,u:0,pm:0}]));
+  const inc=(id,f,v)=>{const o=m.get(id);if(o)o[f]+=v};
+  s.matches.forEach(x=>uniq(x.players).forEach(id=>inc(id,"gp",1)));
+  s.goals.forEach(x=>{inc(x.scorer,"g",1);[x.a1,x.a2].forEach(a=>a&&inc(a,"a",1));if(s.pm)uniq(x.ice).forEach(id=>inc(id,"pm",1))});
+  if(s.pm)s.ga.forEach(x=>uniq(x.ice).forEach(id=>inc(id,"pm",-1)));
+  s.pens.forEach(x=>inc(x.pid,"u",Number(x.min)||0));
+  return [...m.values()].map(o=>({...o,pts:o.g+o.a}));
+}
+function statKey(){const s=cur();if(S.stat==="pm"&&!s.pm)S.stat="pts";return S.stat}
+function leaderboard(){
+  const k=statKey();
+  const cmp={pts:(x,y)=>y.pts-x.pts||y.g-x.g||x.gp-y.gp,g:(x,y)=>y.g-x.g||y.pts-x.pts||x.gp-y.gp,a:(x,y)=>y.a-x.a||y.pts-x.pts||x.gp-y.gp,u:(x,y)=>y.u-x.u||y.gp-x.gp,pm:(x,y)=>y.pm-x.pm||y.gp-x.gp}[k];
+  let rows=computeStats().sort((x,y)=>cmp(x,y)||nrCmp(x.p,y.p));
+  if(S.hide)rows=rows.filter(r=>k==="pm"?r.gp>0:r[k]>0);
+  let rank=0,prev=null;
+  rows.forEach((r,i)=>{if(r[k]!==prev){rank=i+1;prev=r[k]}r.rank=rank});
+  if(S.top!=="alla")rows=rows.slice(0,Number(S.top));
+  return rows;
+}
+const fmtPM=v=>v>0?"+"+v:String(v);
+
+/* ---------- vyer ---------- */
+function banner(){
+  const s=cur(),mins=s.pens.reduce((t,x)=>t+(Number(x.min)||0),0);
+  return `<div class="banner" ${S.shot?'data-a="unshot"':''}><h1>${esc(s.lag)} · ${TITLES[statKey()]}</h1><p>${esc([s.serie,s.sasong].filter(Boolean).join(" · "))}</p></div>
+  <div class="totals">Lag: ${s.matches.length} matcher · ${s.goals.length} mål${s.ga.length?" · "+s.ga.length+" insläppta":""} · ${mins} utv.min</div>`;
+}
+function viewLista(){
+  const s=cur();if(!s)return emptyState();
+  const k=statKey(),rows=leaderboard();
+  const cols=[["gp","Mat"],["g","Mål"],["a","Ass"],["pts","P"],["u","Utv"]];if(s.pm)cols.push(["pm","+/-"]);
+  const tmpl="28px 28px minmax(0,1fr) "+cols.map(c=>c[0]==="pts"?"36px":c[0]==="pm"?"36px":"32px").join(" ");
+  const max=Math.max(1,...rows.map(r=>Math.max(0,r[k])));
+  const fmt=(c,v)=>c==="pm"?fmtPM(v):(v||"-");
+  const head=`<div class="row head"><div>#</div><div>Nr</div><div class="nm nmh">Spelare</div>${cols.map(([c,t])=>`<div class="${c===k?"hlh":""}">${t}</div>`).join("")}</div>`;
+  const body=rows.length?rows.map(r=>`<div class="row"><div class="rk ${r.rank<=3?"r"+r.rank:""}">${r.rank}</div><div class="mu">${esc(r.p.nr)}</div><div class="nm"><span>${esc(r.p.name)}</span><div class="bar"><i style="width:${Math.round(Math.max(0,r[k])/max*100)}%"></i></div></div>${cols.map(([c])=>`<div class="${c===k?"hl":(r[c]||c==="pm"?"":"mu")}${c==="gp"?" gpc":""}">${fmt(c,r[c])}</div>`).join("")}</div>`).join("")
+    :`<div class="empty">${players.length?(s.matches.length?"Ingen statistik i den här listan ännu.":"Inga matcher ännu. Lägg till en under Matcher."):"Inga spelare ännu. Lägg till dem under Spelare."}</div>`;
+  const card=`${banner()}<div class="table" style="--cols:${tmpl}">${head}${body}</div>`;
+  if(S.shot)return card+`<div class="hint"><span>Tryck på rubriken för att avsluta</span></div>`;
+  const segs=[["pts","Poäng"],["g","Mål"],["a","Assist"],["u","Utv"]];if(s.pm)segs.push(["pm","+/-"]);
+  const seg=`<div class="seg" style="grid-template-columns:repeat(${segs.length},1fr)">${segs.map(([v,t])=>`<button data-a="stat" data-v="${v}" aria-pressed="${k===v}">${t}</button>`).join("")}</div>`;
+  const ctrls=`<div class="ctrls"><label>Visa <select class="in" id="topn" style="width:auto;min-height:40px">${["alla","5","10","15","20"].map(v=>`<option value="${v}" ${S.top===v?"selected":""}>${v==="alla"?"Alla":"Topp "+v}</option>`).join("")}</select></label>
+  <label><input type="checkbox" id="hide" ${S.hide?"checked":""}> ${k==="pm"?"Dölj spelare utan matcher":"Dölj nollor"}</label></div>
+  <div class="ctrls"><button class="btn primary" data-a="shot">Skärmbildsläge</button><button class="btn" data-a="copy">Kopiera som text</button></div>`;
+  return seg+ctrls+card+`<p class="note">Mat = spelade matcher. Skärmbildsläget döljer menyer och knappar så att du kan ta en skärmbild och dela i gruppen.</p>`;
+}
+function chip(p,o){return `<button class="chip ${o.sel?"sel":""} ${o.lock?"lock":""}" data-a="${o.act}" data-id="${esc(p.id)}" aria-pressed="${!!o.sel}" ${o.lock?"disabled":""}><b>${esc(p.nr)}</b><span>${esc(short(p.name))}</span></button>`}
+function viewMatches(){
+  const s=cur();if(!s)return emptyState();
+  if(S.mform)return viewMatchForm();
+  const m=S.mid&&matchOf(S.mid);if(m)return viewMatch(m);
+  if(!players.length)return `<div class="card empty">Lägg först till spelare under Spelare.</div>`;
+  const list=sortedMatches().map(m=>{const [f,a]=score(m);return `<button class="mcard" data-a="m-open" data-id="${esc(m.id)}"><div><div class="d">${esc(fmtDate(m.date,true))}</div><small>${m.opp?"Mot "+esc(m.opp):"Motståndare ej angiven"} · ${m.players.length} spelare${m.auto?" · kontrollera":""}</small></div><div class="score">${f}–${a}</div></button>`}).join("");
+  return `<p style="margin:0 0 12px"><button class="btn primary big" data-a="m-new">+ Ny match</button></p>
+  <div class="card"><label class="switch"><input type="checkbox" id="pm-toggle" ${s.pm?"checked":""}> Registrera +/- (valfritt)</label>
+  <p class="note" style="margin:6px 0 0">${s.pm?"När du lägger in ett mål eller insläppt mål väljer du också vilka som var på isen.":"Slå på om ni vill föra plus/minus. Allt annat fungerar som vanligt utan det."}</p></div>
+  ${list||'<div class="card empty">Inga matcher ännu. Tryck på Ny match.</div>'}`;
+}
+function viewMatchForm(){
+  const f=S.mform,s=cur();
+  const opps=uniq(s.matches.map(m=>m.opp));
+  const last=sortedMatches().find(m=>m.id!==f.id&&m.players.length);
+  return `<button class="link" data-a="mf-cancel">← Avbryt</button>
+  <div class="card"><h2>${f.id?"Ändra match":"Ny match"}</h2><div class="fields">
+    <label>Datum<input class="in" type="date" id="mf-date" value="${esc(f.date)}"></label>
+    <label>Motståndare<input class="in" type="text" id="mf-opp" list="opps" value="${esc(f.opp)}" placeholder="Valfritt" autocomplete="off"></label></div>
+    <datalist id="opps">${opps.map(o=>`<option value="${esc(o)}">`).join("")}</datalist></div>
+  <div class="card"><div class="cardhead"><h2>Spelare i matchen</h2><span class="count">${f.sel.length} valda</span></div>
+    <p class="note" style="margin:0 0 10px">Tryck på alla som spelade.</p>
+    <div class="rowbtns"><button class="btn small" data-a="mf-all">Välj alla</button><button class="btn small" data-a="mf-none">Rensa</button>${last?`<button class="btn small" data-a="mf-last" data-id="${esc(last.id)}">Samma som förra matchen</button>`:""}</div>
+    <div class="grid">${players.map(p=>chip(p,{sel:f.sel.includes(p.id),act:"mf-tog"})).join("")}</div></div>
+  <div class="savebar"><button class="btn primary" data-a="mf-save" ${f.sel.length?"":"disabled"}>${f.id?"Spara ändringar":"Spara och lägg in statistik"}</button></div>`;
+}
+function viewMatch(m){
+  const s=cur(),[f,a]=score(m);
+  let gf=0,gaa=0;
+  const evs=evOf(m).map(e=>{
+    if(e.t==="g")gf++;else if(e.t==="ga")gaa++;
+    const rs=e.t==="u"?"":`<span class="rs">${gf}–${gaa}</span>`;
+    const ice=(s.pm||e.x.ice&&e.x.ice.length)&&e.t!=="u"&&e.x.ice.length?`<small>På isen: ${esc(nrs(e.x.ice))}</small>`:"";
+    let txt;
+    if(e.t==="g")txt=`<span class="tag">MÅL</span>${rs}<b style="display:block">${esc(plabel(e.x.scorer))}</b>${(e.x.a1||e.x.a2)?`<small>Assist: ${[e.x.a1,e.x.a2].filter(Boolean).map(x=>esc(plabel(x))).join(", ")}</small>`:""}${ice}`;
+    else if(e.t==="ga")txt=`<span class="tag ga">INSLÄPPT</span>${rs}<b style="display:block">Insläppt mål</b>${ice}`;
+    else txt=`<span class="tag u">UTV</span><b style="display:block">${esc(plabel(e.x.pid))}</b><small>${esc(e.x.min)} min</small>`;
+    const key=e.t+":"+e.x.id;
+    return `<div class="ev"><div style="min-width:0">${txt}</div><div class="evb"><button class="btn small" data-a="ev-edit" data-t="${e.t}" data-id="${esc(e.x.id)}">Ändra</button><button class="btn small danger" data-a="del" data-t="${e.t}" data-id="${esc(e.x.id)}">${S.confirm===key?"Säker?":"Ta bort"}</button></div></div>`;
+  }).join("");
+  const acts=`<div class="acts"><button class="goal" data-a="ev-new" data-t="g">+ Mål</button><button data-a="ev-new" data-t="ga">+ Insläppt</button><button data-a="ev-new" data-t="u">+ Utvisning</button></div>`;
+  return `<button class="link" data-a="m-back">← Alla matcher</button>
+  <div class="card"><div class="mh-top"><div><h2 style="margin:0;text-transform:capitalize">${esc(fmtDate(m.date))}</h2><div class="sub">${m.opp?"Mot "+esc(m.opp):"Motståndare ej angiven"}</div></div><div class="score">${f}–${a}</div></div>
+    <p class="note">${m.players.length} spelare: ${esc(nrs(m.players))||"inga valda"}</p>
+    ${m.auto?`<p class="warn">Spelarna i den här matchen är gissade från gammal statistik. Tryck på Ändra match och kontrollera.</p>`:""}
+    <button class="btn small" data-a="mf-edit">Ändra match och spelare</button></div>
+  ${S.ev?editor(m):acts}
+  ${evs?`<h3 class="sec">Händelser</h3>${evs}`:`<div class="card empty">Inga mål eller utvisningar ännu.</div>`}
+  <p style="margin:20px 0 0"><button class="btn danger" data-a="m-del">${S.confirm==="m:"+m.id?"Säker? Allt i matchen tas bort":"Ta bort matchen"}</button></p>`;
+}
+function prevIce(m){
+  const e=S.ev,s=cur();
+  const list=[...s.goals,...s.ga].filter(x=>x.mid===m.id&&x.id!==e.id&&x.ice&&x.ice.length).sort((a,b)=>(b.ts||0)-(a.ts||0));
+  return list[0]?list[0].ice:null;
+}
+function iceBlock(m,part,sign,locked){
+  const e=S.ev,sel=uniq([...locked,...e.ice]),prev=prevIce(m);
+  return `<h3 class="sec">På isen (${sign}1) <span class="count">${sel.length} valda</span></h3>
+   ${sign==="+"?'<p class="note" style="margin:0 0 8px">Målskytt och assist räknas med automatiskt.</p>':""}
+   <div class="rowbtns">${prev?'<button class="btn small" data-a="ice-prev">Samma som förra</button>':""}<button class="btn small" data-a="ice-none">Rensa</button></div>
+   <div class="grid">${part.map(p=>chip(p,{sel:sel.includes(p.id),lock:locked.includes(p.id),act:"ev-ice"})).join("")}</div>`;
+}
+function editor(m){
+  const e=S.ev,s=cur(),part=m.players.map(pById).filter(Boolean).sort(nrCmp);
+  const cancel=`<button class="btn" data-a="ev-cancel">Avbryt</button>`;
+  if(!part.length)return `<div class="card"><p>Välj först vilka spelare som var med i matchen.</p><p style="display:flex;gap:8px"><button class="btn primary" data-a="mf-edit">Välj spelare</button>${cancel}</p></div>`;
+  let inner,ok;
+  if(e.t==="g"){
+    const names=["Målskytt","Assist 1","Assist 2"];
+    const slots=names.map((n,i)=>{const id=e.pick[i];return `<div class="slot ${e.slot===i?"active":""}" data-a="slot" data-i="${i}"><div><small>${n}${i?" (valfri)":""}</small><b>${id?esc(plabel(id)):"Tryck på ett nummer nedan"}</b></div>${id?`<button class="x" data-a="clear" data-i="${i}" aria-label="Rensa ${n}">×</button>`:""}</div>`}).join("");
+    inner=`<div class="slots">${slots}</div><div class="grid">${part.map(p=>chip(p,{sel:e.pick.includes(p.id),act:"ev-pick"})).join("")}</div>${s.pm?iceBlock(m,part,"+",e.pick.filter(Boolean)):""}`;
+    ok=!!e.pick[0];
+  }else if(e.t==="ga"){
+    inner=s.pm?iceBlock(m,part,"−",[]):`<p class="note" style="margin:0">Räknas in i matchresultatet. Slå på +/- under Matcher om ni vill registrera vilka som var på isen.</p>`;
+    ok=true;
+  }else{
+    inner=`<div class="grid">${part.map(p=>chip(p,{sel:e.pid===p.id,act:"ev-pid"})).join("")}</div>
+      <div class="mins">${[2,4,5,10,20].map(v=>`<button class="chip ${Number(e.min)===v?"sel":""}" data-a="min" data-v="${v}" aria-pressed="${Number(e.min)===v}"><b>${v}</b></button>`).join("")}
+      <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:14px">annat <input class="in" id="ev-min" type="number" inputmode="numeric" min="1" max="60" value="${esc(e.min)}" style="width:76px"></label>min</div>`;
+    ok=!!e.pid&&Number(e.min)>0;
+  }
+  const title={g:"Mål",ga:"Insläppt mål",u:"Utvisning"}[e.t];
+  return `<div class="card editor"><h2>${e.id?"Ändra "+title.toLowerCase():title}</h2>${inner}
+   <div class="savebar" style="display:grid;grid-template-columns:2fr 1fr;gap:8px"><button class="btn primary" data-a="ev-save" ${ok?"":"disabled"}>Spara</button>${cancel}</div></div>`;
+}
+function viewPlayers(){
+  const s=cur();if(!s)return emptyState();
+  const stats=new Map(computeStats().map(r=>[r.p.id,r]));
+  const add=`<div class="card"><h2>Lägg till spelare</h2><div class="fields">
+    <label>Nummer<input class="in" id="n-nr" type="number" inputmode="numeric" min="0" max="99"></label>
+    <label>Position<select class="in" id="n-pos"><option value="UP">Utespelare</option><option value="MV">Målvakt</option></select></label>
+    <label class="wide">Namn<input class="in" id="n-name" type="text" autocomplete="off" placeholder="Förnamn Efternamn"></label></div>
+    <p style="margin:12px 0 0"><button class="btn primary" style="width:100%" data-a="padd">Lägg till</button></p></div>`;
+  const list=players.map(p=>{
+    if(S.edit===p.id)return `<div class="ev"><div class="fields" style="flex:1"><label>Nr<input class="in" id="e-nr" type="number" inputmode="numeric" value="${esc(p.nr)}"></label>
+      <label>Pos<select class="in" id="e-pos"><option value="UP" ${p.pos!=="MV"?"selected":""}>Utespelare</option><option value="MV" ${p.pos==="MV"?"selected":""}>Målvakt</option></select></label>
+      <label class="wide">Namn<input class="in" id="e-name" value="${esc(p.name)}"></label>
+      <div class="wide" style="display:flex;gap:8px"><button class="btn primary small" data-a="psave" data-id="${esc(p.id)}">Spara</button><button class="btn small" data-a="pcancel">Avbryt</button></div></div></div>`;
+    const r=stats.get(p.id);
+    return `<div class="ev"><div><b style="font:700 22px var(--font-d);display:inline-block;min-width:34px">${esc(p.nr)}</b><b>${esc(p.name)}</b> <small style="display:inline">${p.pos==="MV"?"Målvakt":""}</small><small>${r.gp} matcher · ${r.g} mål · ${r.a} assist · ${r.u} utv.min${s.pm?" · "+fmtPM(r.pm):""}</small></div>
+      <div class="evb"><button class="btn small" data-a="pedit" data-id="${esc(p.id)}">Ändra</button><button class="btn small danger" data-a="pdel" data-id="${esc(p.id)}">${S.confirm==="p:"+p.id?"Säker?":"Ta bort"}</button></div></div>`;
+  }).join("");
+  return add+(list||'<div class="card empty">Inga spelare ännu.</div>');
+}
+function seasonForm(first){
+  const s=cur();
+  return `<div class="card"><h2>${first?"Skapa ett lag":"Nytt lag eller ny säsong"}</h2><div class="fields">
+    <label class="wide">Lag<input class="in" id="ns-lag" placeholder="t.ex. MIF"></label>
+    <label class="wide">Serie<input class="in" id="ns-serie" placeholder="t.ex. U13 Valkoinen, lohko 3b"></label>
+    <label class="wide">Säsong<input class="in" id="ns-sas" placeholder="t.ex. 2026–2027"></label></div>
+    ${!first&&players.length?`<p style="margin:10px 0 0"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="ns-copy" checked> Kopiera spelarlistan från ${esc(s?s.lag:"")} ${esc(s?s.sasong:"")}</label></p>`:""}
+    <p style="margin:12px 0 0"><button class="btn primary" style="width:100%" data-a="newseason">Skapa</button></p></div>`;
+}
+function importCard(){
+  const im=S.imp;
+  let body=`<p class="note" style="margin:0 0 10px">Välj en CSV-fil som du har sparat från appen eller fått av någon. Allt som finns i appen just nu ersätts.</p>
+    <label class="btn" style="display:block;text-align:center">Välj CSV-fil<input type="file" id="imp-file" accept=".csv,text/csv,text/plain,.txt" style="display:none"></label>`;
+  if(im){
+    body+=im.error?`<p class="warn">${esc(im.error)}</p>`:`<div style="margin-top:12px"><b>${esc(im.name)}</b><br>${im.counts.seasons} säsong(er), ${im.counts.players} spelare, ${im.counts.matches} matcher, ${im.counts.goals} mål, ${im.counts.pens} utvisningar.
+      ${im.warnings.length?`<p class="warn">${im.warnings.length} rad(er) hoppades över eller ändrades:<br>${im.warnings.slice(0,6).map(esc).join("<br>")}${im.warnings.length>6?"<br>…":""}</p>`:""}
+      <p style="display:flex;gap:8px;margin:12px 0 0"><button class="btn primary" data-a="imp-do">${S.confirm==="imp"?"Säker? Tryck igen":"Ersätt all data"}</button><button class="btn" data-a="imp-cancel">Avbryt</button></p></div>`;
+  }
+  return `<div class="card"><h2>Importera</h2>${body}</div>`;
+}
+function emptyState(){return seasonForm(true)+importCard()}
+function viewData(){
+  const when=D.last?new Date(D.last).toLocaleString("sv-SE",{dateStyle:"medium",timeStyle:"short"}):"aldrig";
+  const t=D.seasons.reduce((a,s)=>({p:a.p+s.players.length,m:a.m+s.matches.length,g:a.g+s.goals.length,u:a.u+s.pens.length}),{p:0,m:0,g:0,u:0});
+  return `<div class="card"><h2>Säkerhetskopia</h2>
+    <p style="margin:0 0 6px">Senast sparad som fil: <b>${esc(when)}</b><br>${D.changes||0} ändringar sedan dess.</p>
+    <p class="note" style="margin:0 0 12px">${D.seasons.length} säsong(er), ${t.p} spelare, ${t.m} matcher, ${t.g} mål, ${t.u} utvisningar.</p>
+    ${storageOK?"":`<p class="warn">Den här webbläsaren kan inte spara data mellan besök. Spara en fil efter varje matchdag.</p>`}
+    <p style="display:grid;gap:8px;margin:0"><button class="btn primary" data-a="exp-share">Dela fil (WhatsApp m.m.)</button><button class="btn" data-a="exp-dl">Spara som CSV-fil</button></p>
+    <p class="note">Datan ligger bara på den här enheten. Spara en fil då och då som säkerhetskopia, särskilt innan du rensar webbläsarens data. CSV-filen går också att öppna i Excel.</p></div>
+    ${S.csvText?`<div class="card"><h2>Filtext</h2><p class="note" style="margin:0 0 8px">Filen kunde inte sparas direkt. Markera texten, kopiera och klistra in i en textfil som du sparar som .csv.</p><textarea class="in" rows="8" readonly>${esc(S.csvText)}</textarea></div>`:""}
+    ${importCard()}`;
+}
+function sheetHtml(){
+  const s=cur();
+  return `<div class="scrim" data-a="closesheet"><div class="sheet" data-a="stay"><h2>Lag och säsong</h2>
+   <div class="sl">${D.seasons.map(x=>`<button data-a="season" data-id="${esc(x.id)}" aria-pressed="${x.id===sid}"><b>${esc(x.lag)}</b> · ${esc(x.sasong||"")}<br><small style="color:var(--muted)">${esc(x.serie||"")}</small></button>`).join("")}</div>
+   ${s?`<div class="card"><h2>Ändra uppgifter</h2><div class="fields"><label class="wide">Lag<input class="in" id="es-lag" value="${esc(s.lag)}"></label><label class="wide">Serie<input class="in" id="es-serie" value="${esc(s.serie||"")}"></label><label class="wide">Säsong<input class="in" id="es-sas" value="${esc(s.sasong||"")}"></label></div><p style="margin:12px 0 0;display:flex;gap:8px"><button class="btn primary" data-a="esave">Spara</button><button class="btn danger" data-a="sdel">${S.confirm==="s:"+s.id?"Säker? Tryck igen":"Ta bort säsongen"}</button></p></div>`:""}
+   ${seasonForm(false)}
+   <p style="margin:12px 0 0"><button class="btn" style="width:100%" data-a="closesheet">Stäng</button></p></div></div>`;
+}
+function header(){
+  const s=cur();let pill="";
+  if(!storageOK)pill=`<button class="pill" data-a="tab" data-v="data">Sparas inte, spara fil</button>`;
+  else if((D.changes||0)>0)pill=`<button class="pill" data-a="tab" data-v="data">${D.changes} ej sparade i fil</button>`;
+  return `<div class="top"><button class="seasonbtn" data-a="sheet">${s?esc(s.lag)+" · "+esc(s.sasong||""):"Välj lag"} ▾</button>${pill}</div>`;
+}
+function nav(){
+  const T=[["lista","Lista"],["matcher","Matcher"],["spel","Spelare"],["data","Data"]];
+  return `<nav class="nav"><div class="navin">${T.map(([v,t])=>`<button data-a="tab" data-v="${v}" ${S.tab===v?'aria-current="page"':""}>${t}</button>`).join("")}</div></nav>`;
+}
+function render(force){
+  const act=document.activeElement;
+  if(!force&&act&&/^(INPUT|SELECT|TEXTAREA)$/.test(act.tagName)&&$("#app").contains(act)){S.pending=true;return}
+  S.pending=false;
+  const y=window.scrollY;
+  let body;
+  if(!cur())body=emptyState();
+  else if(S.tab==="lista")body=viewLista();else if(S.tab==="matcher")body=viewMatches();else if(S.tab==="data")body=viewData();else body=viewPlayers();
+  const shot=S.shot&&S.tab==="lista";
+  document.body.classList.toggle("shot",shot);
+  $("#app").innerHTML=(shot?"":header())+body+(shot?"":nav())+(S.sheet&&!shot?sheetHtml():"")+(S.toast&&!shot?`<div class="toast" role="status"><span>${esc(S.toast.text)}</span>${S.toast.undo?`<button data-a="undo">Ångra</button>`:""}</div>`:"");
+  window.scrollTo(0,y);
+}
+function toast(text,undo){S.toast={text,undo:undo||null};clearTimeout(toastTimer);toastTimer=setTimeout(()=>{S.toast=null;render()},7000)}
+function confirmTwice(key){
+  if(S.confirm===key){S.confirm=null;return true}
+  S.confirm=key;setTimeout(()=>{if(S.confirm===key){S.confirm=null;render()}},3500);render(true);return false;
+}
+const val=id=>{const el=document.getElementById(id);return el?el.value:""};
+function setMid(id){S.mid=id;LS.set("mid",id)}
+function switchSeason(id){LS.set("sid",id);sid=id;S.sheet=false;S.ev=null;S.mform=null;setMid(null);sync();render(true)}
+function go(fn){fn();render(true);window.scrollTo(0,0)}
+
+/* ---------- CSV ---------- */
+const CSV_HEAD=["typ","lag","serie","sasong","match","datum","motstandare","nr","namn","pos","assist1_nr","assist2_nr","minuter","spelare_nr"];
+const q=v=>{v=v==null?"":String(v);return /[;"\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
+function toCSV(){
+  const rows=[CSV_HEAD];
+  [...D.seasons].sort((a,b)=>(a.created||0)-(b.created||0)).forEach(s=>{
+    const nrOf=id=>{const p=s.players.find(x=>x.id===id);return p?p.nr:""};
+    const list=ids=>uniq(ids).map(id=>s.players.find(x=>x.id===id)).filter(Boolean).sort(nrCmp).map(p=>p.nr).join(" ");
+    const R=o=>rows.push([o.typ,s.lag,s.serie||"",s.sasong||"",o.m||"",o.d||"",o.o||"",o.nr==null?"":o.nr,o.namn||"",o.pos||"",o.a1==null?"":o.a1,o.a2==null?"":o.a2,o.min==null?"":o.min,o.l||""]);
+    R({typ:"installning",namn:"plusminus",nr:s.pm?1:0});
+    s.players.slice().sort(nrCmp).forEach(p=>R({typ:"spelare",nr:p.nr,namn:p.name,pos:p.pos||"UP"}));
+    const ms=s.matches.slice().sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))||(a.ts||0)-(b.ts||0));
+    const key=new Map(ms.map((m,i)=>[m.id,"m"+(i+1)]));
+    ms.forEach(m=>R({typ:"match",m:key.get(m.id),d:m.date,o:m.opp,l:list(m.players)}));
+    const mm=id=>s.matches.find(m=>m.id===id)||{};
+    [...s.goals.map(x=>["mal",x]),...s.ga.map(x=>["slappt",x]),...s.pens.map(x=>["utvisning",x])].sort((a,b)=>(a[1].ts||0)-(b[1].ts||0)).forEach(([t,x])=>{
+      const m=mm(x.mid),base={typ:t,m:key.get(x.mid)||"",d:m.date,o:m.opp};
+      if(t==="mal")R({...base,nr:nrOf(x.scorer),a1:nrOf(x.a1),a2:nrOf(x.a2),l:list(x.ice)});
+      else if(t==="slappt")R({...base,l:list(x.ice)});
+      else R({...base,nr:nrOf(x.pid),min:x.min});
+    });
+  });
+  return rows.map(r=>r.map(q).join(";")).join("\r\n")+"\r\n";
+}
+function parseCSV(text){
+  text=text.replace(/^﻿/,"");
+  const first=text.split(/\r?\n/)[0]||"",cnt=c=>first.split(c).length;
+  const delim=cnt(";")>=cnt(",")&&cnt(";")>=cnt("\t")?";":(cnt(",")>=cnt("\t")?",":"\t");
+  const rows=[];let row=[],f="",inq=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(inq){if(c==='"'){if(text[i+1]==='"'){f+='"';i++}else inq=false}else f+=c}
+    else if(c==='"')inq=true;
+    else if(c===delim){row.push(f);f=""}
+    else if(c==="\n"||c==="\r"){if(c==="\r"&&text[i+1]==="\n")i++;row.push(f);f="";if(row.some(x=>x!==""))rows.push(row);row=[]}
+    else f+=c;
+  }
+  row.push(f);if(row.some(x=>x!==""))rows.push(row);
+  return rows;
+}
+function normDate(s){
+  s=String(s||"").trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s))return s;
+  const m=s.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/);
+  return m?`${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`:s;
+}
+const norm=t=>String(t||"").trim().toLowerCase().replace(/[åä]/g,"a").replace(/ö/g,"o");
+function parseImport(text){
+  const rows=parseCSV(text);
+  if(rows.length<2)return {error:"Filen innehåller inga rader."};
+  const H=rows[0].map(norm),ix=n=>H.indexOf(n);
+  if(ix("typ")<0||ix("lag")<0||ix("nr")<0)return {error:"Det här ser inte ut som en databasfil från appen (kolumnerna typ, lag och nr saknas)."};
+  const g=(r,n)=>{const i=ix(n);return i<0?"":String(r[i]==null?"":r[i]).trim()};
+  const seasons=new Map(),warnings=[];let n=0;
+  const seasonOf=r=>{const k=[g(r,"lag"),g(r,"serie"),g(r,"sasong")].join("\u0001");
+    if(!seasons.has(k)){const s=newSeason(g(r,"lag")||"Lag",g(r,"serie"),g(r,"sasong"),[],seasons.size+1);s._mk=new Map();seasons.set(k,s)}
+    return seasons.get(k)};
+  const body=rows.slice(1).map((r,i)=>{let t=norm(g(r,"typ"));if(t==="inslappt")t="slappt";return {r,line:i+2,t}});
+  const find=(s,v)=>{const nr=parseInt(v,10);return isNaN(nr)?null:(s.players.find(p=>Number(p.nr)===nr)||null)};
+  const ids=(s,v,line)=>String(v||"").split(/[\s,]+/).filter(Boolean).map(x=>{const p=find(s,x);if(!p)warnings.push("Rad "+line+": nummer "+x+" finns inte, ignorerat");return p&&p.id}).filter(Boolean);
+  body.filter(o=>o.t==="installning").forEach(({r})=>{if(norm(g(r,"namn"))==="plusminus")seasonOf(r).pm=g(r,"nr")==="1"});
+  body.filter(o=>o.t==="spelare").forEach(({r,line})=>{
+    const s=seasonOf(r),nr=parseInt(g(r,"nr"),10),name=g(r,"namn");
+    if(isNaN(nr)||!name){warnings.push("Rad "+line+": spelare utan nummer eller namn hoppades över");return}
+    if(s.players.some(p=>Number(p.nr)===nr)){warnings.push("Rad "+line+": nummer "+nr+" fanns redan, hoppades över");return}
+    s.players.push({id:uid(),nr,name,pos:g(r,"pos").toUpperCase()==="MV"?"MV":"UP"});
+  });
+  body.filter(o=>o.t==="match").forEach(({r,line})=>{
+    const s=seasonOf(r),k=g(r,"match")||(g(r,"datum")+"|"+g(r,"motstandare"));
+    const m={id:uid(),date:normDate(g(r,"datum")),opp:g(r,"motstandare"),players:ids(s,g(r,"spelare_nr"),line),ts:++n};
+    s.matches.push(m);s._mk.set(k,m);
+  });
+  const place=(s,r,ev)=>{const k=g(r,"match"),m=k&&s._mk.get(k);if(m)ev.mid=m.id;else{ev.date=normDate(g(r,"datum"));ev.opp=g(r,"motstandare")}return ev};
+  body.forEach(({r,line,t})=>{
+    if(t==="mal"){
+      const s=seasonOf(r),sc=find(s,g(r,"nr"));
+      if(!sc){warnings.push("Rad "+line+": målskytt "+g(r,"nr")+" finns inte, målet hoppades över");return}
+      const a=["assist1_nr","assist2_nr"].map(c=>{const v=g(r,c);if(!v)return null;const p=find(s,v);if(!p)warnings.push("Rad "+line+": assist "+v+" finns inte, ignorerad");return p?p.id:null});
+      s.goals.push(place(s,r,{id:uid(),scorer:sc.id,a1:a[0],a2:a[1],ice:ids(s,g(r,"spelare_nr"),line),ts:++n}));
+    }else if(t==="slappt"){
+      const s=seasonOf(r);s.ga.push(place(s,r,{id:uid(),ice:ids(s,g(r,"spelare_nr"),line),ts:++n}));
+    }else if(t==="utvisning"){
+      const s=seasonOf(r),p=find(s,g(r,"nr")),min=Number(String(g(r,"minuter")).replace(",","."));
+      if(!p||!(min>0)){warnings.push("Rad "+line+": utvisning utan giltigt nummer eller minuter hoppades över");return}
+      s.pens.push(place(s,r,{id:uid(),pid:p.id,min,ts:++n}));
+    }
+  });
+  const list=[...seasons.values()];list.forEach(s=>{delete s._mk;migrateSeason(s)});
+  if(!list.length)return {error:"Hittade inga spelare eller händelser i filen."};
+  const sum=f=>list.reduce((a,s)=>a+s[f].length,0);
+  return {seasons:list,warnings,counts:{seasons:list.length,players:sum("players"),matches:sum("matches"),goals:sum("goals"),pens:sum("pens")}};
+}
+function markExported(){D.last=new Date().toISOString();D.changes=0;persist();render(true)}
+function csvFile(){
+  const one=D.seasons.length===1?D.seasons[0]:null;
+  const slug=t=>String(t||"").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^A-Za-z0-9]+/g,"_").replace(/^_|_$/g,"");
+  return {text:"﻿"+toCSV(),name:(one?slug(one.lag)+"_"+slug(one.sasong):"lagdata")+"_"+today()+".csv"};
+}
+async function exportDownload(){
+  const {text,name}=csvFile();
+  try{
+    const url=URL.createObjectURL(new Blob([text],{type:"text/csv;charset=utf-8"}));
+    const a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),5000);
+    markExported();toast("Filen sparades som "+name+". Titta i Hämtade filer.");
+  }catch(e){S.csvText=text;toast("Filen kunde inte sparas direkt. Kopiera texten nedan.");render(true)}
+}
+async function exportShare(){
+  const {text,name}=csvFile();
+  try{
+    const file=new File([text],name,{type:"text/csv"});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:name});markExported();return}
+  }catch(e){if(e&&e.name==="AbortError")return}
+  toast("Den här webbläsaren kan inte dela filer direkt. Använd Spara som CSV-fil.");render(true);
+}
+async function readFile(file){
+  try{return await file.text()}catch(e){return await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result));r.onerror=rej;r.readAsText(file)})}
+}
+
+/* ---------- händelser i match ---------- */
+function openEditor(t,id){
+  const s=cur();
+  if(!id){S.ev={t,id:null,slot:0,pick:[null,null,null],ice:[],pid:null,min:2};return}
+  const x=(t==="g"?s.goals:t==="ga"?s.ga:s.pens).find(y=>y.id===id);if(!x)return;
+  S.ev={t,id,slot:0,pick:[x.scorer||null,x.a1||null,x.a2||null],ice:(x.ice||[]).slice(),pid:x.pid||null,min:x.min||2};
+}
+function saveEvent(){
+  const e=S.ev,s=cur(),m=matchOf(S.mid);if(!e||!m)return;
+  const isNew=!e.id,id=e.id||uid();
+  let arr,obj,label;
+  if(e.t==="g"){
+    if(!e.pick[0])return;
+    const [sc,a1,a2]=e.pick;
+    const old=s.goals.find(x=>x.id===id);
+    const ice=s.pm?uniq([sc,a1,a2,...e.ice]):(old?old.ice:[]);
+    obj={id,mid:m.id,scorer:sc,a1:a1||null,a2:a2||null,ice,ts:old?old.ts:Date.now()};arr="goals";
+    const as=[a1,a2].filter(Boolean).map(a=>"#"+(pById(a)||{}).nr).join(", ");
+    label="Mål: #"+(pById(sc)||{}).nr+" "+pname(sc)+(as?" (assist "+as+")":"");
+  }else if(e.t==="ga"){
+    const old=s.ga.find(x=>x.id===id);
+    obj={id,mid:m.id,ice:s.pm?uniq(e.ice):(old?old.ice:[]),ts:old?old.ts:Date.now()};arr="ga";label="Insläppt mål";
+  }else{
+    const min=Number(e.min);if(!e.pid||!(min>0))return;
+    const old=s.pens.find(x=>x.id===id);
+    obj={id,mid:m.id,pid:e.pid,min,ts:old?old.ts:Date.now()};arr="pens";label="Utvisning: #"+(pById(e.pid)||{}).nr+" "+pname(e.pid)+", "+min+" min";
+  }
+  s[arr]=s[arr].filter(x=>x.id!==id).concat(obj);
+  S.ev=null;
+  toast((isNew?"Sparat. ":"Ändrat. ")+label,isNew?()=>{cur()[arr]=cur()[arr].filter(x=>x.id!==id);changed()}:null);
+  changed();
+}
+function saveMatch(){
+  const f=S.mform,s=cur();if(!f||!f.sel.length)return;
+  if(f.id){
+    const m=s.matches.find(x=>x.id===f.id);if(!m)return;
+    const need=uniq([...s.goals.filter(x=>x.mid===m.id).flatMap(x=>[x.scorer,x.a1,x.a2,...x.ice]),...s.ga.filter(x=>x.mid===m.id).flatMap(x=>x.ice),...s.pens.filter(x=>x.mid===m.id).map(x=>x.pid)]);
+    const kept=need.filter(id=>!f.sel.includes(id)&&pById(id));
+    m.date=f.date;m.opp=f.opp.trim();m.players=uniq([...f.sel,...kept]);delete m.auto;
+    toast(kept.length?"Sparat. Nr "+nrs(kept)+" behölls eftersom de har statistik i matchen.":"Matchen är sparad.");
+  }else{
+    const m={id:uid(),date:f.date,opp:f.opp.trim(),players:uniq(f.sel),ts:Date.now()};
+    s.matches.push(m);setMid(m.id);toast("Matchen är skapad. Lägg nu in mål och utvisningar.");
+  }
+  S.mform=null;changed();window.scrollTo(0,0);
+}
+function shareText(){
+  const s=cur(),rows=leaderboard(),k=statKey();
+  const v=r=>(k==="pts"?r.pts+" p ("+r.g+"+"+r.a+")":k==="g"?r.g+" mål":k==="a"?r.a+" assist":k==="u"?r.u+" min":fmtPM(r.pm))+", "+r.gp+" m";
+  return [s.lag+" · "+TITLES[k],[s.serie,s.sasong].filter(Boolean).join(" · "),"",...rows.map(r=>r.rank+". "+r.p.name+" (#"+r.p.nr+") "+v(r))].join("\n");
+}
+async function copyText(){
+  const t=shareText();
+  try{await navigator.clipboard.writeText(t);toast("Texten är kopierad. Klistra in i WhatsApp.");render(true)}
+  catch(e){toast("Kopiering blockerades. Markera texten nedan och kopiera manuellt.");render(true);
+    const ta=document.createElement("textarea");ta.value=t;ta.className="in";ta.rows=10;ta.style.marginTop="12px";ta.readOnly=true;$("#app").insertBefore(ta,$(".nav"));ta.focus();ta.select()}
+}
+document.addEventListener("click",ev=>{
+  const el=ev.target.closest("[data-a]");if(!el)return;
+  const a=el.dataset.a,d=el.dataset;
+  if(a==="stay")return;
+  if(a==="closesheet"&&ev.target.closest(".sheet")&&!ev.target.closest("button[data-a=closesheet]"))return;
+  const s=cur(),e=S.ev,f=S.mform;
+  switch(a){
+    case"tab":go(()=>{if(S.tab===d.v&&d.v==="matcher"){setMid(null);S.ev=null;S.mform=null}S.tab=d.v;LS.set("tab",S.tab);S.shot=false;S.edit=null;S.csvText=null;S.sheet=false});break;
+    case"stat":S.stat=d.v;LS.set("stat",S.stat);render(true);break;
+    case"shot":S.shot=true;render(true);window.scrollTo(0,0);break;
+    case"unshot":S.shot=false;render(true);break;
+    case"copy":copyText();break;
+    /* matcher */
+    case"m-new":go(()=>{S.mform={id:null,date:today(),opp:"",sel:[]}});break;
+    case"m-open":go(()=>{setMid(d.id);S.ev=null});break;
+    case"m-back":go(()=>{setMid(null);S.ev=null});break;
+    case"m-del":{const m=matchOf(S.mid);if(!m||!confirmTwice("m:"+m.id))break;
+      ["goals","ga","pens"].forEach(k=>s[k]=s[k].filter(x=>x.mid!==m.id));s.matches=s.matches.filter(x=>x.id!==m.id);
+      setMid(null);S.ev=null;toast("Matchen är borttagen.");changed();window.scrollTo(0,0);break}
+    case"mf-edit":go(()=>{const m=matchOf(S.mid);if(m)S.mform={id:m.id,date:m.date||"",opp:m.opp||"",sel:m.players.slice()};S.ev=null});break;
+    case"mf-cancel":go(()=>{S.mform=null});break;
+    case"mf-tog":f.sel=f.sel.includes(d.id)?f.sel.filter(x=>x!==d.id):f.sel.concat(d.id);render(true);break;
+    case"mf-all":f.sel=players.map(p=>p.id);render(true);break;
+    case"mf-none":f.sel=[];render(true);break;
+    case"mf-last":{const m=matchOf(d.id);if(m)f.sel=m.players.filter(id=>pById(id));render(true);break}
+    case"mf-save":saveMatch();break;
+    case"ev-new":openEditor(d.t);render(true);break;
+    case"ev-edit":openEditor(d.t,d.id);render(true);{const ed=$(".editor");if(ed)ed.scrollIntoView({block:"start"})}break;
+    case"ev-cancel":S.ev=null;render(true);break;
+    case"ev-save":saveEvent();break;
+    case"slot":e.slot=Number(d.i);render(true);break;
+    case"clear":ev.stopPropagation();e.pick[Number(d.i)]=null;e.slot=Number(d.i);render(true);break;
+    case"ev-pick":{
+      const i=e.pick.indexOf(d.id);
+      if(i>-1){e.pick[i]=null;e.slot=i}
+      else{e.pick[e.slot]=d.id;const nx=e.pick.findIndex(x=>!x);e.slot=nx>-1?nx:e.slot}
+      render(true);break}
+    case"ev-ice":e.ice=e.ice.includes(d.id)?e.ice.filter(x=>x!==d.id):e.ice.concat(d.id);render(true);break;
+    case"ice-prev":{const p=prevIce(matchOf(S.mid));if(p)e.ice=p.slice();render(true);break}
+    case"ice-none":e.ice=[];render(true);break;
+    case"ev-pid":e.pid=d.id;render(true);break;
+    case"min":e.min=Number(d.v);render(true);break;
+    case"undo":{const u=S.toast&&S.toast.undo;S.toast=null;if(u)u();else render(true);break}
+    case"del":{
+      if(!confirmTwice(d.t+":"+d.id))break;
+      const k=d.t==="g"?"goals":d.t==="ga"?"ga":"pens";s[k]=s[k].filter(x=>x.id!==d.id);
+      if(S.ev&&S.ev.id===d.id)S.ev=null;changed();break}
+    /* spelare */
+    case"padd":{
+      const nr=parseInt(val("n-nr"),10),name=val("n-name").trim(),pos=val("n-pos")||"UP";
+      if(isNaN(nr)||!name){toast("Fyll i nummer och namn.");render(true);break}
+      if(players.some(p=>Number(p.nr)===nr)){toast("Nummer "+nr+" används redan.");render(true);break}
+      s.players.push({id:uid(),nr,name,pos});toast("Spelare tillagd: #"+nr+" "+name);changed();break}
+    case"pedit":S.edit=d.id;render(true);break;
+    case"pcancel":S.edit=null;render(true);break;
+    case"psave":{
+      const nr=parseInt(val("e-nr"),10),name=val("e-name").trim(),pos=val("e-pos")||"UP";
+      if(isNaN(nr)||!name){toast("Fyll i nummer och namn.");render(true);break}
+      if(players.some(p=>p.id!==d.id&&Number(p.nr)===nr)){toast("Nummer "+nr+" används redan.");render(true);break}
+      const p=s.players.find(x=>x.id===d.id);if(p){p.nr=nr;p.name=name;p.pos=pos}
+      S.edit=null;changed();break}
+    case"pdel":{
+      if(!confirmTwice("p:"+d.id))break;
+      s.players=s.players.filter(p=>p.id!==d.id);
+      s.matches.forEach(m=>m.players=m.players.filter(x=>x!==d.id));[...s.goals,...s.ga].forEach(x=>x.ice=x.ice.filter(y=>y!==d.id));
+      toast("Spelaren är borttagen. Hens mål och utvisningar visas som Okänd spelare.");changed();break}
+    /* säsong */
+    case"sheet":S.sheet=true;render(true);break;
+    case"closesheet":S.sheet=false;render(true);break;
+    case"season":switchSeason(d.id);break;
+    case"esave":{
+      const lag=val("es-lag").trim();if(!lag){toast("Ange lagets namn.");render(true);break}
+      s.lag=lag;s.serie=val("es-serie").trim();s.sasong=val("es-sas").trim();
+      S.sheet=false;toast("Uppgifterna är sparade.");changed();break}
+    case"sdel":{
+      if(!s||!confirmTwice("s:"+s.id))break;
+      D.seasons=D.seasons.filter(x=>x.id!==s.id);
+      sid=D.seasons[0]?D.seasons[0].id:null;LS.set("sid",sid);S.sheet=false;setMid(null);
+      toast("Säsongen är borttagen.");changed();break}
+    case"newseason":{
+      const lag=val("ns-lag").trim();if(!lag){toast("Ange lagets namn.");render(true);break}
+      const copy=document.getElementById("ns-copy"),old=copy&&copy.checked?players.slice():[];
+      const n=newSeason(lag,val("ns-serie").trim(),val("ns-sas").trim(),old.map(p=>({id:uid(),nr:p.nr,name:p.name,pos:p.pos||"UP"})));
+      if(s&&copy)n.pm=s.pm;
+      D.seasons.push(n);LS.set("sid",n.id);sid=n.id;S.sheet=false;S.ev=null;S.mform=null;setMid(null);
+      toast("Ny säsong skapad.");changed();break}
+    /* data */
+    case"exp-dl":exportDownload();break;
+    case"exp-share":exportShare();break;
+    case"imp-cancel":S.imp=null;S.confirm=null;render(true);break;
+    case"imp-do":{
+      if(!S.imp||S.imp.error||!confirmTwice("imp"))break;
+      D={v:2,last:new Date().toISOString(),changes:0,seasons:S.imp.seasons};
+      const c=S.imp.counts;S.imp=null;S.ev=null;S.mform=null;setMid(null);
+      sid=D.seasons[0].id;LS.set("sid",sid);persist();sync();
+      toast("Importerade "+c.players+" spelare, "+c.matches+" matcher, "+c.goals+" mål och "+c.pens+" utvisningar.");render(true);break}
+  }
+});
+document.addEventListener("input",ev=>{
+  const t=ev.target;
+  if(t.id==="mf-date"&&S.mform)S.mform.date=t.value;
+  else if(t.id==="mf-opp"&&S.mform)S.mform.opp=t.value;
+  else if(t.id==="ev-min"&&S.ev)S.ev.min=Number(t.value)||0;
+});
+document.addEventListener("change",async ev=>{
+  const t=ev.target;
+  if(t.id==="topn"){S.top=t.value;LS.set("top",S.top);t.blur();render(true)}
+  else if(t.id==="hide"){S.hide=t.checked;LS.set("hide",S.hide);t.blur();render(true)}
+  else if(t.id==="pm-toggle"){cur().pm=t.checked;toast(t.checked?"+/- är påslaget för den här säsongen.":"+/- är avstängt. Inmatad data sparas ändå.");changed()}
+  else if(t.id==="ev-min"){if(S.ev)S.ev.min=Number(t.value)||0;t.blur();render(true)}
+  else if(t.id==="mf-date"||t.id==="mf-opp"){t.blur()}
+  else if(t.id==="imp-file"){
+    const fl=t.files&&t.files[0];if(!fl)return;
+    try{const r=parseImport(await readFile(fl));S.imp={name:fl.name,...r}}catch(e){S.imp={name:fl.name,error:"Filen kunde inte läsas."}}
+    S.confirm=null;render(true);
+  }
+});
+document.addEventListener("focusout",()=>{if(S.pending)setTimeout(()=>{if(S.pending)render()},50)});
+sync();render(true);
