@@ -171,7 +171,11 @@ const KEY="lp_data_v1";
 let storageOK=true;
 const SEED=[]; /* Inga namn i koden: spelarna hämtas från tulospalvelu. */
 function newSeason(lag,serie,sasong,players,created){return {id:uid(),lag,serie:serie||"",sasong:sasong||"",created:created||Date.now(),pm:false,players:players||[],matches:[],goals:[],ga:[],pens:[]}}
-function seedData(){return {v:2,last:null,changes:0,seasons:[newSeason("MIF","U13 Valkoinen, lohko 3b","2026–2027",SEED.map(([nr,name])=>({id:uid(),nr,name,pos:nr>=90?"MV":"UP"})),1)]}}
+function seedData(){
+  const s=newSeason("MIF","U13 Valkoinen, lohko 3b","2026–2027",SEED.map(([nr,name])=>({id:uid(),nr,name,pos:nr>=90?"MV":"UP"})),1);
+  s.tp={season:2027,ssid:4378,tid:1368627176,serieId:1787};
+  return {v:2,last:null,changes:0,seasons:[s]};
+}
 /* Gör om äldre data (mål utan match) till matcher. Deltagare = alla som har statistik i matchen. */
 function migrateSeason(s){
   s.players=s.players||[];s.goals=s.goals||[];s.pens=s.pens||[];s.ga=s.ga||[];s.pm=!!s.pm;
@@ -204,7 +208,8 @@ if(!D.seasons.find(s=>s.id===sid))sid=D.seasons[0]?D.seasons[0].id:null;
 let players=[],toastTimer=null;
 const S={
   tab:LS.get("tab","lista"),stat:LS.get("stat","pts"),top:LS.get("top","alla"),hide:LS.get("hide",true),shot:false,
-  mid:LS.get("mid",null),mform:null,ev:null,edit:null,sheet:false,toast:null,confirm:null,pending:false,imp:null,csvText:null
+  mid:LS.get("mid",null),mform:null,ev:null,edit:null,sheet:false,toast:null,confirm:null,pending:false,imp:null,csvText:null,
+  link:null,sync:null
 };
 if(S.tab==="add"||S.tab==="hist")S.tab="matcher";
 const cur=()=>D.seasons.find(s=>s.id===sid);
@@ -270,7 +275,7 @@ function viewLista(){
   const seg=`<div class="seg" style="grid-template-columns:repeat(${segs.length},1fr)">${segs.map(([v,t])=>`<button data-a="stat" data-v="${v}" aria-pressed="${k===v}">${t}</button>`).join("")}</div>`;
   const ctrls=`<div class="ctrls"><label>Visa <select class="in" id="topn" style="width:auto;min-height:40px">${["alla","5","10","15","20"].map(v=>`<option value="${v}" ${S.top===v?"selected":""}>${v==="alla"?"Alla":"Topp "+v}</option>`).join("")}</select></label>
   <label><input type="checkbox" id="hide" ${S.hide?"checked":""}> ${k==="pm"?"Dölj spelare utan matcher":"Dölj nollor"}</label></div>
-  <div class="ctrls"><button class="btn primary" data-a="shot">Skärmbildsläge</button><button class="btn" data-a="copy">Kopiera som text</button></div>`;
+  <div class="ctrls"><button class="btn primary" data-a="shot">Skärmbildsläge</button><button class="btn" data-a="copy">Kopiera som text</button>${s.tp?`<button class="btn" data-a="tp-sync" ${S.sync?"disabled":""}>${S.sync?"Hämtar…":"↻ Hämta matcher"}</button>`:""}</div>`;
   return seg+ctrls+card+`<p class="note">Mat = spelade matcher. Skärmbildsläget döljer menyer och knappar så att du kan ta en skärmbild och dela i gruppen.</p>`;
 }
 function chip(p,o){return `<button class="chip ${o.sel?"sel":""} ${o.lock?"lock":""}" data-a="${o.act}" data-id="${esc(p.id)}" aria-pressed="${!!o.sel}" ${o.lock?"disabled":""}><b>${esc(p.nr)}</b><span>${esc(short(p.name))}</span></button>`}
@@ -278,12 +283,17 @@ function viewMatches(){
   const s=cur();if(!s)return emptyState();
   if(S.mform)return viewMatchForm();
   const m=S.mid&&matchOf(S.mid);if(m)return viewMatch(m);
-  if(!players.length)return `<div class="card empty">Lägg först till spelare under Spelare.</div>`;
-  const list=sortedMatches().map(m=>{const [f,a]=score(m);return `<button class="mcard" data-a="m-open" data-id="${esc(m.id)}"><div><div class="d">${esc(fmtDate(m.date,true))}</div><small>${m.opp?"Mot "+esc(m.opp):"Motståndare ej angiven"} · ${m.players.length} spelare${m.auto?" · kontrollera":""}</small></div><div class="score">${f}–${a}</div></button>`}).join("");
-  return `<p style="margin:0 0 12px"><button class="btn primary big" data-a="m-new">+ Ny match</button></p>
+  if(S.link)return linkCard();
+  const tpDates=new Set(s.matches.filter(m=>m.gid).map(m=>m.date));
+  const list=sortedMatches().map(m=>{const [f,a]=score(m);
+    const dup=!m.gid&&tpDates.has(m.date);
+    return `<button class="mcard" data-a="m-open" data-id="${esc(m.id)}"><div><div class="d">${esc(fmtDate(m.date,true))}</div><small>${m.opp?"Mot "+esc(m.opp):"Motståndare ej angiven"} · ${m.players.length} spelare${m.gid?" · tulospalvelu":" · manuell"}${m.auto?" · kontrollera":""}</small>${dup?'<small style="color:var(--danger);font-weight:600">Möjlig dubblett av en hämtad match</small>':""}</div><div class="score">${f}–${a}</div></button>`}).join("");
+  const manual=s.tp?`<p style="margin:0 0 12px"><button class="btn" style="width:100%" data-a="m-new">+ Lägg till match manuellt</button></p>`
+    :`<p style="margin:0 0 12px"><button class="btn primary big" data-a="m-new">+ Ny match</button></p>`;
+  return `${tpCard()}${players.length||s.tp?manual:`<div class="card empty">Lägg först till spelare under Spelare.</div>`}
   <div class="card"><label class="switch"><input type="checkbox" id="pm-toggle" ${s.pm?"checked":""}> Registrera +/- (valfritt)</label>
   <p class="note" style="margin:6px 0 0">${s.pm?"När du lägger in ett mål eller insläppt mål väljer du också vilka som var på isen.":"Slå på om ni vill föra plus/minus. Allt annat fungerar som vanligt utan det."}</p></div>
-  ${list||'<div class="card empty">Inga matcher ännu. Tryck på Ny match.</div>'}`;
+  ${list||`<div class="card empty">Inga matcher ännu. ${s.tp?"Tryck på Hämta matcher.":"Tryck på Ny match."}</div>`}`;
 }
 function viewMatchForm(){
   const f=S.mform,s=cur();
@@ -319,6 +329,7 @@ function viewMatch(m){
   <div class="card"><div class="mh-top"><div><h2 style="margin:0;text-transform:capitalize">${esc(fmtDate(m.date))}</h2><div class="sub">${m.opp?"Mot "+esc(m.opp):"Motståndare ej angiven"}</div></div><div class="score">${f}–${a}</div></div>
     <p class="note">${m.players.length} spelare: ${esc(nrs(m.players))||"inga valda"}</p>
     ${m.auto?`<p class="warn">Spelarna i den här matchen är gissade från gammal statistik. Tryck på Ändra match och kontrollera.</p>`:""}
+    ${m.gid?`<p class="note">Hämtad från tulospalvelu. Om du ändrar här skrivs det över när du väljer "Hämta om alla matcher" under Data. <a href="${TP_SITE}game?season=${esc(s.tp?s.tp.season:"")}&gameid=${esc(m.gid)}&lang=fi" target="_blank" rel="noopener">Öppna matchen ↗</a></p>`:""}
     <button class="btn small" data-a="mf-edit">Ändra match och spelare</button></div>
   ${S.ev?editor(m):acts}
   ${evs?`<h3 class="sec">Händelser</h3>${evs}`:`<div class="card empty">Inga mål eller utvisningar ännu.</div>`}
@@ -398,11 +409,34 @@ function importCard(){
   }
   return `<div class="card"><h2>Importera</h2>${body}</div>`;
 }
-function emptyState(){return seasonForm(true)+importCard()}
+function emptyState(){
+  if(S.link)return linkCard();
+  return `<div class="card"><h2>Hämta från tulospalvelu</h2><p class="note" style="margin:0 0 10px">Välj laget i tulospalvelu.leijonat.fi. Spelare och matcher hämtas automatiskt.</p><button class="btn primary" style="width:100%" data-a="lk-new">Välj lag i tulospalvelu</button></div>`+seasonForm(true)+importCard();
+}
+function proxyCard(){
+  return `<div class="card"><h2>Anslutning</h2>
+    <p class="note" style="margin:0 0 10px">Tulospalvelu släpper inte in anrop direkt från en app i webbläsaren. Därför går anropen via en liten proxy. Lämna fältet tomt om appen körs via den medföljande servern.</p>
+    <div class="fields"><label class="wide">Proxyadress<input class="in" id="px" type="url" inputmode="url" placeholder="https://…workers.dev/" value="${esc(LS.get("proxy",""))}" autocomplete="off"></label></div>
+    <p style="display:flex;gap:8px;margin:12px 0 0"><button class="btn primary small" data-a="px-save">Spara och testa</button></p>
+    <p class="note">Används nu: ${esc(tpBase())}</p></div>`;
+}
+function tpDataCard(){
+  const s=cur();if(!s)return "";
+  if(!s.tp)return `<div class="card"><h2>Tulospalvelu</h2><p class="note" style="margin:0 0 10px">Den här säsongen är inte kopplad. Koppla den för att hämta matcher automatiskt.</p><button class="btn primary" data-a="lk-link">Koppla till tulospalvelu</button></div>`;
+  return `<div class="card"><h2>Tulospalvelu</h2>
+    <p style="margin:0 0 6px">Kopplad till lag-id ${esc(s.tp.tid)}, serie-id ${esc(s.tp.ssid)}, säsong ${esc(s.tp.season)}.</p>
+    <p class="note" style="margin:0 0 12px">Senast hämtat: ${s.tpAt?esc(new Date(s.tpAt).toLocaleString("sv-SE",{dateStyle:"medium",timeStyle:"short"})):"aldrig"}.</p>
+    <p style="display:grid;gap:8px;margin:0">
+      <button class="btn" data-a="tp-force" ${S.sync?"disabled":""}>${S.confirm==="tpforce"?"Säker? Ändringar i hämtade matcher skrivs över":"Hämta om alla matcher"}</button>
+      <button class="btn" data-a="lk-link">Byt lag eller serie</button>
+      <button class="btn danger" data-a="tp-unlink">${S.confirm==="tpunlink"?"Säker? Tryck igen":"Koppla bort"}</button></p>
+    <p class="note">Hämtade matcher finns kvar om du kopplar bort. Manuellt inlagda matcher påverkas aldrig.</p></div>`;
+}
 function viewData(){
   const when=D.last?new Date(D.last).toLocaleString("sv-SE",{dateStyle:"medium",timeStyle:"short"}):"aldrig";
   const t=D.seasons.reduce((a,s)=>({p:a.p+s.players.length,m:a.m+s.matches.length,g:a.g+s.goals.length,u:a.u+s.pens.length}),{p:0,m:0,g:0,u:0});
-  return `<div class="card"><h2>Säkerhetskopia</h2>
+  if(S.link)return linkCard();
+  return `${tpDataCard()}${proxyCard()}<div class="card"><h2>Säkerhetskopia</h2>
     <p style="margin:0 0 6px">Senast sparad som fil: <b>${esc(when)}</b><br>${D.changes||0} ändringar sedan dess.</p>
     <p class="note" style="margin:0 0 12px">${D.seasons.length} säsong(er), ${t.p} spelare, ${t.m} matcher, ${t.g} mål, ${t.u} utvisningar.</p>
     ${storageOK?"":`<p class="warn">Den här webbläsaren kan inte spara data mellan besök. Spara en fil efter varje matchdag.</p>`}
@@ -416,6 +450,7 @@ function sheetHtml(){
   return `<div class="scrim" data-a="closesheet"><div class="sheet" data-a="stay"><h2>Lag och säsong</h2>
    <div class="sl">${D.seasons.map(x=>`<button data-a="season" data-id="${esc(x.id)}" aria-pressed="${x.id===sid}"><b>${esc(x.lag)}</b> · ${esc(x.sasong||"")}<br><small style="color:var(--muted)">${esc(x.serie||"")}</small></button>`).join("")}</div>
    ${s?`<div class="card"><h2>Ändra uppgifter</h2><div class="fields"><label class="wide">Lag<input class="in" id="es-lag" value="${esc(s.lag)}"></label><label class="wide">Serie<input class="in" id="es-serie" value="${esc(s.serie||"")}"></label><label class="wide">Säsong<input class="in" id="es-sas" value="${esc(s.sasong||"")}"></label></div><p style="margin:12px 0 0;display:flex;gap:8px"><button class="btn primary" data-a="esave">Spara</button><button class="btn danger" data-a="sdel">${S.confirm==="s:"+s.id?"Säker? Tryck igen":"Ta bort säsongen"}</button></p></div>`:""}
+   <p style="margin:0 0 12px"><button class="btn primary" style="width:100%" data-a="lk-new">+ Nytt lag från tulospalvelu</button></p>
    ${seasonForm(false)}
    <p style="margin:12px 0 0"><button class="btn" style="width:100%" data-a="closesheet">Stäng</button></p></div></div>`;
 }
@@ -453,19 +488,21 @@ function switchSeason(id){LS.set("sid",id);sid=id;S.sheet=false;S.ev=null;S.mfor
 function go(fn){fn();render(true);window.scrollTo(0,0)}
 
 /* ---------- CSV ---------- */
-const CSV_HEAD=["typ","lag","serie","sasong","match","datum","motstandare","nr","namn","pos","assist1_nr","assist2_nr","minuter","spelare_nr"];
+const CSV_HEAD=["typ","lag","serie","sasong","match","datum","motstandare","nr","namn","pos","assist1_nr","assist2_nr","minuter","spelare_nr","tp_id"];
+const TP_KEYS=[["tp_season","season"],["tp_serieid","ssid"],["tp_lagid","tid"],["tp_serie","serieId"]];
 const q=v=>{v=v==null?"":String(v);return /[;"\n\r]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
 function toCSV(){
   const rows=[CSV_HEAD];
   [...D.seasons].sort((a,b)=>(a.created||0)-(b.created||0)).forEach(s=>{
     const nrOf=id=>{const p=s.players.find(x=>x.id===id);return p?p.nr:""};
     const list=ids=>uniq(ids).map(id=>s.players.find(x=>x.id===id)).filter(Boolean).sort(nrCmp).map(p=>p.nr).join(" ");
-    const R=o=>rows.push([o.typ,s.lag,s.serie||"",s.sasong||"",o.m||"",o.d||"",o.o||"",o.nr==null?"":o.nr,o.namn||"",o.pos||"",o.a1==null?"":o.a1,o.a2==null?"":o.a2,o.min==null?"":o.min,o.l||""]);
+    const R=o=>rows.push([o.typ,s.lag,s.serie||"",s.sasong||"",o.m||"",o.d||"",o.o||"",o.nr==null?"":o.nr,o.namn||"",o.pos||"",o.a1==null?"":o.a1,o.a2==null?"":o.a2,o.min==null?"":o.min,o.l||"",o.gid||""]);
     R({typ:"installning",namn:"plusminus",nr:s.pm?1:0});
+    if(s.tp)TP_KEYS.forEach(([n,k])=>R({typ:"installning",namn:n,nr:s.tp[k]||0}));
     s.players.slice().sort(nrCmp).forEach(p=>R({typ:"spelare",nr:p.nr,namn:p.name,pos:p.pos||"UP"}));
     const ms=s.matches.slice().sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))||(a.ts||0)-(b.ts||0));
     const key=new Map(ms.map((m,i)=>[m.id,"m"+(i+1)]));
-    ms.forEach(m=>R({typ:"match",m:key.get(m.id),d:m.date,o:m.opp,l:list(m.players)}));
+    ms.forEach(m=>R({typ:"match",m:key.get(m.id),d:m.date,o:m.opp,l:list(m.players),gid:m.gid}));
     const mm=id=>s.matches.find(m=>m.id===id)||{};
     [...s.goals.map(x=>["mal",x]),...s.ga.map(x=>["slappt",x]),...s.pens.map(x=>["utvisning",x])].sort((a,b)=>(a[1].ts||0)-(b[1].ts||0)).forEach(([t,x])=>{
       const m=mm(x.mid),base={typ:t,m:key.get(x.mid)||"",d:m.date,o:m.opp};
@@ -512,7 +549,12 @@ function parseImport(text){
   const body=rows.slice(1).map((r,i)=>{let t=norm(g(r,"typ"));if(t==="inslappt")t="slappt";return {r,line:i+2,t}});
   const find=(s,v)=>{const nr=parseInt(v,10);return isNaN(nr)?null:(s.players.find(p=>Number(p.nr)===nr)||null)};
   const ids=(s,v,line)=>String(v||"").split(/[\s,]+/).filter(Boolean).map(x=>{const p=find(s,x);if(!p)warnings.push("Rad "+line+": nummer "+x+" finns inte, ignorerat");return p&&p.id}).filter(Boolean);
-  body.filter(o=>o.t==="installning").forEach(({r})=>{if(norm(g(r,"namn"))==="plusminus")seasonOf(r).pm=g(r,"nr")==="1"});
+  body.filter(o=>o.t==="installning").forEach(({r})=>{
+    const n=norm(g(r,"namn")),s=seasonOf(r);
+    if(n==="plusminus")s.pm=g(r,"nr")==="1";
+    const tk=TP_KEYS.find(([x])=>x===n),v=parseInt(g(r,"nr"),10);
+    if(tk&&v>0){s.tp=s.tp||{};s.tp[tk[1]]=v}
+  });
   body.filter(o=>o.t==="spelare").forEach(({r,line})=>{
     const s=seasonOf(r),nr=parseInt(g(r,"nr"),10),name=g(r,"namn");
     if(isNaN(nr)||!name){warnings.push("Rad "+line+": spelare utan nummer eller namn hoppades över");return}
@@ -522,6 +564,7 @@ function parseImport(text){
   body.filter(o=>o.t==="match").forEach(({r,line})=>{
     const s=seasonOf(r),k=g(r,"match")||(g(r,"datum")+"|"+g(r,"motstandare"));
     const m={id:uid(),date:normDate(g(r,"datum")),opp:g(r,"motstandare"),players:ids(s,g(r,"spelare_nr"),line),ts:++n};
+    const gid=parseInt(g(r,"tp_id"),10);if(gid>0)m.gid=gid;
     s.matches.push(m);s._mk.set(k,m);
   });
   const place=(s,r,ev)=>{const k=g(r,"match"),m=k&&s._mk.get(k);if(m)ev.mid=m.id;else{ev.date=normDate(g(r,"datum"));ev.opp=g(r,"motstandare")}return ev};
@@ -539,7 +582,7 @@ function parseImport(text){
       s.pens.push(place(s,r,{id:uid(),pid:p.id,min,ts:++n}));
     }
   });
-  const list=[...seasons.values()];list.forEach(s=>{delete s._mk;migrateSeason(s)});
+  const list=[...seasons.values()];list.forEach(s=>{delete s._mk;if(s.tp&&!(s.tp.season&&s.tp.ssid&&s.tp.tid))delete s.tp;migrateSeason(s)});
   if(!list.length)return {error:"Hittade inga spelare eller händelser i filen."};
   const sum=f=>list.reduce((a,s)=>a+s[f].length,0);
   return {seasons:list,warnings,counts:{seasons:list.length,players:sum("players"),matches:sum("matches"),goals:sum("goals"),pens:sum("pens")}};
@@ -569,6 +612,195 @@ async function exportShare(){
 }
 async function readFile(file){
   try{return await file.text()}catch(e){return await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result));r.onerror=rej;r.readAsText(file)})}
+}
+
+/* ---------- tulospalvelu.leijonat.fi ----------
+   Tjänsten har inget officiellt API men använder öppna JSON-endpoints. Den skickar inga
+   CORS-headers, så anropen måste gå via en proxy (proxy/worker.js eller proxy/server.js).
+   Fyll i TP_DEFAULT_PROXY med Worker-adressen så slipper användarna ställa in den själva. */
+const TP_SITE="https://tulospalvelu.leijonat.fi/";
+const TP_DEFAULT_PROXY="";
+function tpBase(){
+  const p=String(LS.get("proxy","")||TP_DEFAULT_PROXY).trim();
+  if(p)return p.replace(/\/*$/,"/");
+  if(/^https?:$/.test(location.protocol)&&location.hostname)return location.origin+"/api/";
+  return TP_SITE;
+}
+async function tp(path,params){
+  let r;
+  try{r=await fetch(tpBase()+path+"?"+new URLSearchParams(params),{headers:{accept:"application/json"}})}
+  catch(e){throw new Error("Kunde inte nå tulospalvelu. Kontrollera nätet och proxyadressen under Data → Anslutning.")}
+  if(r.status===429)throw new Error("Tulospalvelu säger att det kommit för många anrop. Vänta en stund och försök igen.");
+  if(!r.ok)throw new Error("Tulospalvelu svarade med fel "+r.status+". Kontrollera proxyadressen under Data → Anslutning.");
+  try{return await r.json()}catch(e){throw new Error("Svaret var inte data från tulospalvelu. Kontrollera proxyadressen under Data → Anslutning.")}
+}
+const tpSeasonNow=()=>{const d=new Date();return d.getMonth()>=4?d.getFullYear()+1:d.getFullYear()};
+const tpName=(first,last)=>[first,last].filter(Boolean).join(" ").toLowerCase().replace(/(^|[\s-])(\p{L})/gu,(m,a,b)=>a+b.toUpperCase());
+/* Loggarna skriver namn som "EFTERNAMN Förnamn". */
+const tpLogName=s=>{const w=String(s||"").trim().split(/\s+/);return w.length>1?tpName(w.slice(1).join(" "),w[0]):tpName(w[0]||"","")};
+const nameKey=n=>norm(n).replace(/[^a-z0-9 ]/g,"").replace(/\s+/g," ").trim();
+/* Hitta spelaren: först på exakt namn (nummer kan skilja mellan matcher), sedan på nummer.
+   Finns ingen och namnet är känt läggs spelaren till. */
+function tpPlayer(s,nr,name,role,added){
+  nr=Number(nr);
+  const k=name?nameKey(name):"";
+  let p=k?s.players.find(x=>nameKey(x.name)===k):null;
+  if(!p&&nr>0)p=s.players.find(x=>Number(x.nr)===nr);
+  if(!p&&name&&nr>0){p={id:uid(),nr,name,pos:role==="MV"?"MV":"UP"};s.players.push(p);if(added)added.push(p)}
+  return p||null;
+}
+const tpNrs=str=>String(str||"").match(/\d+/g)||[];
+
+/* Gör om en match från tulospalvelu till appens format. Ersätter en tidigare hämtning av samma match. */
+function tpImportGame(s,g,rep,sum,added){
+  const tid=s.tp.tid,home=g.HomeTeam===tid,date=normDate(g.GameDate);
+  const base=Date.parse(date+"T"+(g.GameTime||"12:00:00"))||Date.now();
+  let m=s.matches.find(x=>x.gid===g.GameID);
+  if(m)["goals","ga","pens"].forEach(k=>s[k]=s[k].filter(x=>x.mid!==m.id));
+  else{m={id:uid(),gid:g.GameID,players:[]};s.matches.push(m)}
+  m.date=date;m.opp=home?g.AwayTeamAbbrv:g.HomeTeamAbbrv;m.ts=base;delete m.auto;
+  const roster=((home?sum.HomeTeamGameRoster:sum.AwayTeamGameRoster)||{}).Players||[];
+  /* Tröjnummer → spelare för just den här matchen */
+  const jersey=new Map();
+  roster.forEach(r=>{const p=tpPlayer(s,r.JerseyNr,tpName(r.FirstName,r.LastName),r.RoleAbbrv,added);if(p)jersey.set(Number(r.JerseyNr),p.id)});
+  const ids=[...jersey.values()];
+  const byLog=(nr,name)=>{nr=Number(nr);if(!(nr>0))return null;if(jersey.has(nr))return jersey.get(nr);const p=tpPlayer(s,nr,name?tpLogName(name):"","",added);if(p)jersey.set(nr,p.id);return p?p.id:null};
+  const ice=str=>uniq(tpNrs(str).map(n=>byLog(n)));
+  let pmSeen=false,skipped=0,teamPen=0,pH=0,pA=0;
+  const logs=(rep.GameLogsUpdate||[]).slice().sort((a,b)=>(a.Period-b.Period)||(a.GameTime-b.GameTime));
+  logs.forEach((l,i)=>{
+    const ts=base+(Number(l.GameTime)||0)*1000+i;
+    if(l.Type==="Goal"){
+      /* Missade straffslag (t.ex. GoalType "RL0") loggas som mål men ändrar inte ställningen. */
+      const h=l.HomeTeamGoals,a=l.AwayTeamGoals,known=typeof h==="number"&&typeof a==="number";
+      const counts=known?(l.TeamId===g.HomeTeam?h>pH:a>pA):!/no goal/i.test(l.GoalSpecialTypeEN||"");
+      if(known){pH=h;pA=a}
+      if(!counts)return;
+      if(l.TeamId===tid){
+        const sc=byLog(l.ScorerJersey,l.ScorerName);
+        if(!sc){skipped++;return}
+        const on=ice(l.Plus);if(on.length)pmSeen=true;
+        s.goals.push({id:uid(),mid:m.id,scorer:sc,a1:byLog(l.FirstAssistJersey,l.FirstAssistName),a2:byLog(l.SecondAssistJersey,l.SecondAssistName),ice:on,ts});
+      }else{
+        const on=ice(l.Minus);if(on.length)pmSeen=true;
+        s.ga.push({id:uid(),mid:m.id,ice:on,ts});
+      }
+    }else if(l.Type==="Penalty"&&l.TeamId===tid){
+      const pid=byLog(l.Jersey,l.Name),min=Number(l.PenaltyMinutesNumber)||0;
+      if(pid&&min>0)s.pens.push({id:uid(),mid:m.id,pid,min,ts});else if(min>0)teamPen++;
+    }
+  });
+  m.players=uniq(ids);
+  migrateSeason(s); /* ser till att alla med statistik räknas som deltagare */
+  return {pmSeen,skipped,teamPen};
+}
+
+async function tpSync(force){
+  const s=cur();if(!s||!s.tp||S.sync)return;
+  S.sync={msg:"Hämtar spelschemat…"};render(true);
+  const added=[];let n=0,pm=false,skipped=0,teamPen=0,errMsg=null;
+  try{
+    const {season,ssid,tid}=s.tp;
+    const data=await tp("helpers/getgames",{season,subSerieId:ssid,teamid:tid,districtid:0,gamedays:3,dog:"",levelid:-1,dwl:0});
+    const games=(Array.isArray(data)?data:[]).flatMap(l=>l.Games||[]).filter(g=>g.HomeTeam===tid||g.AwayTeam===tid);
+    s.tpNext=games.filter(g=>g.GameStatus===0).slice(0,3).map(g=>({date:normDate(g.GameDate),time:(g.GameTime||"").slice(0,5),opp:g.HomeTeam===tid?g.AwayTeamAbbrv:g.HomeTeamAbbrv,home:g.HomeTeam===tid,rink:g.RinkName||""}));
+    const have=new Set(s.matches.filter(m=>m.gid).map(m=>m.gid));
+    const done=games.filter(g=>g.GameStatus===2&&!g.DeniedResults);
+    s.tpHidden=games.filter(g=>g.DeniedResults).length;
+    const todo=done.filter(g=>force||!have.has(g.GameID));
+    for(const g of todo){
+      n++;S.sync={msg:`Hämtar match ${n} av ${todo.length}…`};render(true);
+      const [rep,sum]=await Promise.all([
+        tp("gamereport/getgamereportdata",{gameid:g.GameID,season}),
+        tp("game/helpers/getsummary",{gameid:g.GameID,season,subSerieId:ssid,gamelength:g.GameEffTime||0})]);
+      if(!rep||!rep.GamesUpdate)continue;
+      const r=tpImportGame(s,g,rep,sum||{},added);pm=pm||r.pmSeen;skipped+=r.skipped;teamPen+=r.teamPen;
+    }
+    s.tpAt=new Date().toISOString();
+    if(pm&&!s.pm)s.pm=true;
+    const parts=[todo.length?(force?`${todo.length} matcher hämtades om`:`${todo.length} nya matcher`):"Inga nya matcher"];
+    if(added.length)parts.push(`${added.length} nya spelare`);
+    if(pm)parts.push("+/- finns med");
+    if(skipped)parts.push(`${skipped} mål utan målskytt hoppades över`);
+    if(teamPen)parts.push(`${teamPen} lagstraff räknas inte på någon spelare`);
+    if(s.tpHidden&&!done.length)parts.push("serien visar inte resultat");
+    toast(parts.join(" · ")+".");
+  }catch(e){errMsg=e.message}
+  S.sync=null;
+  if(errMsg)toast(n>1?errMsg+" (Det som hann hämtas är sparat.)":errMsg);
+  changed();
+}
+
+function tpCard(){
+  const s=cur();
+  if(!s.tp)return `<div class="card"><h2>Hämta automatiskt</h2><p class="note" style="margin:0 0 10px">Koppla laget till tulospalvelu.leijonat.fi så hämtas matcher, mål, assist och utvisningar med en knapp.</p><button class="btn primary" style="width:100%" data-a="lk-link">Koppla till tulospalvelu</button></div>`;
+  const when=s.tpAt?new Date(s.tpAt).toLocaleString("sv-SE",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"aldrig";
+  const next=(s.tpNext||[])[0];
+  return `<div class="card"><button class="btn primary big" data-a="tp-sync" ${S.sync?"disabled":""}>${S.sync?esc(S.sync.msg):"↻ Hämta matcher"}</button>
+    <p class="note">Från tulospalvelu · senast hämtat ${esc(when)}${next?`<br>Nästa: <b style="text-transform:capitalize">${esc(fmtDate(next.date,true))}</b> ${esc(next.time)} ${next.home?"hemma mot":"borta mot"} ${esc(next.opp)}`:""}</p></div>`;
+}
+
+/* Välj lag: säsong → nivå → distrikt → serie → lag */
+function openLink(mode){
+  const s=cur();
+  S.link={mode,season:mode==="link"&&s&&s.tp?s.tp.season:tpSeasonNow(),levels:[],level:"",districts:[],district:"",subs:[],ssid:"",teams:[],tid:"",busy:false,err:null};
+  S.sheet=false;S.mform=null;S.ev=null;setMid(null);
+  if(S.tab!=="data")S.tab="matcher";
+  lkLoad("season");
+}
+async function lkLoad(step){
+  const L=S.link;if(!L)return;
+  L.err=null;L.busy=true;render(true);
+  try{
+    if(step==="season"){L.levels=await tp("helpers/getlevels",{season:L.season});L.level="";L.districts=[];L.district="";L.subs=[];L.ssid="";L.teams=[];L.tid=""}
+    if(step==="level"){
+      L.districts=await tp("helpers/getdistricts",{season:L.season,levelId:L.level});L.subs=[];L.ssid="";L.teams=[];L.tid="";
+      L.district=L.districts.length===1?String(L.districts[0].DistrictID):"";
+      if(L.district!=="")step="district";
+    }
+    if(step==="district"){L.subs=await tp("serie/helpers/getsubseries",{season:L.season,levelid:L.level,districtid:L.district});L.ssid="";L.teams=[];L.tid=""}
+    if(step==="sub"){const r=await tp("serie/helpers/getsubserie",{season:L.season,subSerieId:L.ssid,teamid:0});L.teams=r.teams||[];L.serieId=r.serieId||0;L.subName=r.subSerieName||"";L.tid=""}
+  }catch(e){L.err=e.message}
+  if(S.link!==L)return;
+  L.busy=false;render(true);
+}
+function linkCard(){
+  const L=S.link,sn=tpSeasonNow();
+  const opt=(arr,v,l,sel,first)=>`<option value="">${first}</option>`+arr.map(x=>`<option value="${esc(x[v])}" ${String(x[v])===String(sel)?"selected":""}>${esc(x[l])}</option>`).join("");
+  const seasons=[sn,sn-1,sn-2].map(y=>({y,t:(y-1)+"–"+y}));
+  return `<div class="card"><h2>${L.mode==="new"?"Nytt lag från tulospalvelu":"Koppla till tulospalvelu"}</h2>
+    <p class="note" style="margin:0 0 10px">Välj laget som det står i tulospalvelu.leijonat.fi. Spelarlistan hämtas och sedan alla spelade matcher.</p>
+    <div class="fields">
+      <label>Säsong<select class="in" id="lk-season">${seasons.map(x=>`<option value="${x.y}" ${String(x.y)===String(L.season)?"selected":""}>${x.t}</option>`).join("")}</select></label>
+      <label>Nivå<select class="in" id="lk-level" ${L.levels.length?"":"disabled"}>${opt(L.levels,"LevelID","LevelName",L.level,"Välj nivå")}</select></label>
+      <label class="wide">Distrikt<select class="in" id="lk-district" ${L.districts.length?"":"disabled"}>${opt(L.districts,"DistrictID","DistrictName",L.district,"Välj distrikt")}</select></label>
+      <label class="wide">Serie<select class="in" id="lk-sub" ${L.subs.length?"":"disabled"}>${opt(L.subs,"subSerieId","subSerieName",L.ssid,"Välj serie")}</select></label>
+      <label class="wide">Lag<select class="in" id="lk-team" ${L.teams.length?"":"disabled"}>${opt(L.teams,"TeamID","TeamAbbrv",L.tid,"Välj lag")}</select></label>
+    </div>
+    ${L.busy?'<p class="note">Hämtar…</p>':""}${L.err?`<p class="warn">${esc(L.err)}</p>`:""}
+    <p style="display:flex;gap:8px;margin:12px 0 0"><button class="btn primary" data-a="lk-save" ${L.tid&&!L.busy?"":"disabled"}>${L.mode==="new"?"Skapa och hämta":"Koppla och hämta"}</button><button class="btn" data-a="lk-cancel">Avbryt</button></p></div>`;
+}
+async function linkSave(){
+  const L=S.link;if(!L||!L.tid)return;
+  const team=L.teams.find(t=>String(t.TeamID)===String(L.tid))||{};
+  const tp_={season:Number(L.season),ssid:Number(L.ssid),tid:Number(L.tid),serieId:Number(L.serieId)||0};
+  let s;
+  if(L.mode==="new"){
+    s=newSeason(team.TeamAbbrv||"Lag",L.subName,(tp_.season-1)+"–"+tp_.season,[]);
+    D.seasons.push(s);sid=s.id;LS.set("sid",sid);
+  }else{
+    s=cur();
+    if(s.tp&&s.tp.tid!==tp_.tid)s.matches.forEach(m=>{delete m.gid});
+    if(!s.serie)s.serie=L.subName;
+  }
+  s.tp=tp_;
+  L.busy=true;render(true);
+  try{
+    const r=await tp("helpers/getteamserieroster",{season:tp_.season,teamid:tp_.tid,serieId:tp_.serieId,lang:"fi"});
+    (r.Players||[]).forEach(p=>tpPlayer(s,p.JerseyNr,tpName(p.FirstName,p.LastName),p.RoleAbbrv,null));
+  }catch(e){/* spelare läggs till från matcherna i stället */}
+  S.link=null;S.tab="matcher";LS.set("tab",S.tab);persist();sync();
+  await tpSync(false);
 }
 
 /* ---------- händelser i match ---------- */
@@ -635,7 +867,7 @@ document.addEventListener("click",ev=>{
   if(a==="closesheet"&&ev.target.closest(".sheet")&&!ev.target.closest("button[data-a=closesheet]"))return;
   const s=cur(),e=S.ev,f=S.mform;
   switch(a){
-    case"tab":go(()=>{if(S.tab===d.v&&d.v==="matcher"){setMid(null);S.ev=null;S.mform=null}S.tab=d.v;LS.set("tab",S.tab);S.shot=false;S.edit=null;S.csvText=null;S.sheet=false});break;
+    case"tab":go(()=>{if(S.tab===d.v&&d.v==="matcher"){setMid(null);S.ev=null;S.mform=null}if(S.tab!==d.v)S.link=null;S.tab=d.v;LS.set("tab",S.tab);S.shot=false;S.edit=null;S.csvText=null;S.sheet=false});break;
     case"stat":S.stat=d.v;LS.set("stat",S.stat);render(true);break;
     case"shot":S.shot=true;render(true);window.scrollTo(0,0);break;
     case"unshot":S.shot=false;render(true);break;
@@ -714,6 +946,20 @@ document.addEventListener("click",ev=>{
       if(s&&copy)n.pm=s.pm;
       D.seasons.push(n);LS.set("sid",n.id);sid=n.id;S.sheet=false;S.ev=null;S.mform=null;setMid(null);
       toast("Ny säsong skapad.");changed();break}
+    /* tulospalvelu */
+    case"tp-sync":tpSync(false);break;
+    case"tp-force":if(confirmTwice("tpforce"))tpSync(true);break;
+    case"tp-unlink":if(!confirmTwice("tpunlink"))break;delete s.tp;delete s.tpNext;delete s.tpAt;toast("Säsongen är bortkopplad från tulospalvelu.");changed();break;
+    case"lk-new":openLink("new");break;
+    case"lk-link":openLink("link");break;
+    case"lk-cancel":go(()=>{S.link=null});break;
+    case"lk-save":linkSave();break;
+    case"px-save":{
+      const v=val("px").trim();
+      if(v&&!/^https?:\/\//i.test(v)){toast("Adressen ska börja med https://");render(true);break}
+      LS.set("proxy",v);
+      tp("helpers/getlevels",{season:tpSeasonNow()}).then(r=>{toast(Array.isArray(r)&&r.length?"Anslutningen fungerar.":"Svaret var tomt. Kontrollera adressen.");render(true)},e=>{toast(e.message);render(true)});
+      toast("Testar anslutningen…");render(true);break}
     /* data */
     case"exp-dl":exportDownload();break;
     case"exp-share":exportShare();break;
@@ -739,6 +985,14 @@ document.addEventListener("change",async ev=>{
   else if(t.id==="pm-toggle"){cur().pm=t.checked;toast(t.checked?"+/- är påslaget för den här säsongen.":"+/- är avstängt. Inmatad data sparas ändå.");changed()}
   else if(t.id==="ev-min"){if(S.ev)S.ev.min=Number(t.value)||0;t.blur();render(true)}
   else if(t.id==="mf-date"||t.id==="mf-opp"){t.blur()}
+  else if(/^lk-/.test(t.id)&&S.link){
+    const L=S.link,v=t.value;t.blur();
+    if(t.id==="lk-season"){L.season=Number(v);lkLoad("season")}
+    else if(t.id==="lk-level"){L.level=v;if(v)lkLoad("level");else render(true)}
+    else if(t.id==="lk-district"){L.district=v;if(v!=="")lkLoad("district");else render(true)}
+    else if(t.id==="lk-sub"){L.ssid=v;if(v)lkLoad("sub");else render(true)}
+    else if(t.id==="lk-team"){L.tid=v;render(true)}
+  }
   else if(t.id==="imp-file"){
     const fl=t.files&&t.files[0];if(!fl)return;
     try{const r=parseImport(await readFile(fl));S.imp={name:fl.name,...r}}catch(e){S.imp={name:fl.name,error:"Filen kunde inte läsas."}}
