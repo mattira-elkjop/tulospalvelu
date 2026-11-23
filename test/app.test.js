@@ -11,6 +11,7 @@ const SRC = fs.readFileSync(path.join(__dirname, "..", "src", "filapp", "app.js"
 const EXPOSE = `
 ;globalThis.API={S,cur,sync,tpSync,resolveConflict,computeStats,leaderboard,score,toCSV,parseImport,
  saveEvent,openEditor,fMatches,filterLabel,locked,T,render,viewLista,viewMatches,viewMatch,setMid,
+ views,seriesRankOf,shareText,
  get D(){return D},set D(v){D=v},setSid:v=>{sid=v},setLang:v=>{LANG=v},getPlayers:()=>players};`;
 
 const TID = 100, OPP = 200;
@@ -60,6 +61,9 @@ function makeApp(data, opts = {}) {
       else if (p === "helpers/getteamserieroster") body = { Players: ROSTER };
       else if (p === "gamereport/getgamereportdata") body = { GamesUpdate: [{ Id: Number(q.gameid) }], GameLogsUpdate: data.reports[q.gameid] || [] };
       else if (p === "game/helpers/getsummary") body = { HomeTeamGameRoster: { Players: data.rosters[q.gameid] || [] }, AwayTeamGameRoster: { Players: [] } };
+      else if (p === "serie/helpers/getsubserie") body = data.sub || { playerStatistics: false, showStandings: false, winPoints: 2, serieId: 9 };
+      else if (p === "serie/helpers/getstandings" && data.standings) body = data.standings;
+      else if (p === "helpers/getplayers" && data.players) body = { Players: data.players };
       else return { ok: false, status: 404, json: async () => ({}) };
       return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(body)) };
     },
@@ -72,6 +76,7 @@ function makeApp(data, opts = {}) {
   A.store = store;
   return A;
 }
+const plain = x => JSON.parse(JSON.stringify(x));
 const byNr = (A, nr) => A.cur().players.filter(p => p.nr === nr);
 const stat = (A, nr, ms) => A.computeStats(ms).find(r => r.p.nr === nr);
 const matchByGid = (A, gid) => A.cur().matches.find(m => m.gid === gid);
@@ -223,4 +228,79 @@ test("finska och svenska", async () => {
   assert.match(A.viewMatches(), /Hae ottelut/);
   A.setLang("sv");
   assert.match(A.viewLista(), /Poängliga/);
+});
+
+test("serietabell uträknad från alla lags matcher (inget extra anrop)", async () => {
+  const d = baseData();
+  d.games.push(game(3001, "11.10.2026", { HomeTeam: 300, AwayTeam: OPP, HomeTeamAbbrv: "Tredje", AwayTeamAbbrv: "Borta", HomeGoals: 3, AwayGoals: 0 }));
+  const A = makeApp(d);
+  await A.tpSync(false);
+  const s = A.cur();
+  assert.equal(s.matches.length, 2, "bara egna matcher importeras");
+  assert.equal(A.calls.filter(c => c === "helpers/getgames").length, 1);
+  assert.ok(!A.calls.includes("serie/helpers/getstandings") && !A.calls.includes("helpers/getplayers"), "inga serieanrop när tulospalvelu inte visar dem");
+  const t = s.tpTable;
+  assert.equal(t.official, false);
+  // Hem: V + O = 3 p, Tredje: V = 2 p, Borta: O + F + F = 1 p
+  assert.deepEqual(plain(t.rows.map(r => [r.rank, r.name, r.gp, r.pts])), [[1, "Hem", 2, 3], [2, "Tredje", 1, 2], [3, "Borta", 3, 1]]);
+  assert.deepEqual(plain(A.views().map(v => v[0])), ["lag", "tabell"], "ingen Hela serien-vy utan serielista");
+  A.S.view = "tabell";
+  const html = A.viewLista();
+  assert.match(html, /class="row own"/, "eget lag markerat");
+  assert.match(html, /Uträknad från resultaten/);
+  A.S.shot = true;
+  assert.doesNotMatch(A.viewLista(), /data-a="view"|data-a="shot"/, "inga väljare i skärmbildsläget");
+});
+
+test("serie med statistik: officiell tabell, hela serien och egna spelares placering", async () => {
+  const d = baseData();
+  d.sub = { playerStatistics: true, showStandings: true, winPoints: 3, serieId: 9 };
+  d.standings = { StandingLines: ["1"], Teams: [
+    { TeamAbbrv: "Borta", Games: 2, Wins: 1, OtWins: 1, Ties: 0, OtLooses: 0, Looses: 0, GoalsFor: 5, GoalsAgainst: 2, Points: 5, Ranking: 1 },
+    { TeamAbbrv: "Hem", Games: 2, Wins: 1, OtWins: 0, Ties: 0, OtLooses: 1, Looses: 0, GoalsFor: 3, GoalsAgainst: 2, Points: 4, Ranking: 2 }] };
+  const sp = (id, last, team, tid, gp, g, a) => ({ PlayerID: id, FirstName: "Testi", LastName: last, TeamAbbrv: team, TeamID: tid, PlayerGames: gp, PlayerGoals: g, PlayerAssists: a, PlayerPoints: g + a, PlayerPenaltyMin: 0, PlayerPlusMinus: 0 });
+  d.players = [sp(501, "MUU", "Borta", OPP, 2, 4, 2), sp(1, "ALFA", "Hem", TID, 2, 1, 1), sp(502, "TOINEN", "Borta", OPP, 2, 0, 2), sp(4, "DELTA", "Hem", TID, 1, 1, 0)];
+  const A = makeApp(d);
+  await A.tpSync(false);
+  const s = A.cur();
+  assert.equal(s.tpTable.official, true);
+  assert.deepEqual(plain(s.tpTable.rows.map(r => [r.rank, r.name, r.w, r.l, r.pts])), [[1, "Borta", 2, 0, 5], [2, "Hem", 1, 1, 4]]);
+  assert.deepEqual(plain(A.views().map(v => v[0])), ["lag", "serie", "tabell"]);
+  // Egen lista: #5 (tpid 1) har 2 p och är 2:a av 4 i serien
+  assert.deepEqual({ ...A.seriesRankOf(1, "pts") }, { rank: 2, of: 4 });
+  assert.match(A.viewLista(), /Serien 2\/4/);
+  A.S.view = "serie";
+  let html = A.viewLista();
+  assert.equal((html.match(/class="row own"/g) || []).length, 2, "egna spelare markerade i serielistan");
+  assert.match(html, /Hela serien/);
+  A.S.sown = true;
+  html = A.viewLista();
+  assert.doesNotMatch(html, /Muu/, "Bara vårt lag döljer andra lag");
+  assert.match(A.shareText(), /Hela serien/);
+  A.S.shot = true;
+  assert.doesNotMatch(A.viewLista(), /id="sown"|id="topn"|data-a="view"/);
+});
+
+test("avgörande straffslag (VL) räknas i resultatet men inte i spelarstatistiken", async () => {
+  const d = baseData();
+  d.games[1].HomeGoals = 2; // 1002 avgörs på straffar: 2–1
+  d.reports[1002].push(goal("Goal_9", TID, 5, 3900, 2, 1, 7, { GoalType: "VL" }));
+  const A = makeApp(d);
+  await A.tpSync(false);
+  assert.deepEqual([...A.score(matchByGid(A, 1002))], [2, 1]);
+  assert.equal(stat(A, 7).g, 1, "#7 får bara sitt vanliga mål i 1001");
+  const imp = A.parseImport(A.toCSV());
+  assert.equal(imp.seasons[0].goals.filter(x => x.so).length, 1, "flaggan följer med i CSV");
+});
+
+test("mål i powerplay (YV) räknas inte i +/-", async () => {
+  const d = baseData();
+  d.reports[1001][0].Plus = "5 11 7"; d.reports[1001][0].GoalType = "YV";
+  d.reports[1001][2].Plus = "7 4";
+  const A = makeApp(d);
+  await A.tpSync(false);
+  assert.equal(stat(A, 5).pm, 0, "bara YV-mål för #5");
+  assert.equal(stat(A, 7).pm, 1, "#7: YV-målet räknas inte, Goal_3 räknas");
+  const imp = A.parseImport(A.toCSV());
+  assert.equal(imp.seasons[0].goals.filter(x => x.pp).length, 1);
 });

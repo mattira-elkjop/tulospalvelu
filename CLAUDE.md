@@ -37,16 +37,19 @@ D = { v:2, last:ISO|null, changes:Number, seasons:[{
   id, lag, serie, sasong, created, pm:Boolean,          // pm = visa/registrera +/-
   tp:{season, ssid, tid, serieId},                       // koppling till tulospalvelu (saknas för manuella lag)
   tpAt, tpNext:[...], tpNores:Boolean, tpSkip:[GameID],  // senast hämtat, nästa matcher, serie utan resultat, bortvalda matcher
+  tpTable:{official, lines:[rank], rows:[{id?,name,gp,w,t,l,gf,ga,pts,rank}]},  // serietabell
+  tpSeries:[{id,n,t,tid,gp,g,a,u,pm}],                   // hela seriens spelare (bara om tulospalvelu publicerar dem)
+  // tp.flags={stats,standings,winPoints}, tp.abbr = lagets förkortning i serien
   players:[{id, nr, name, pos:"UP"|"MV", tpid?, tpName?, hide?}],
   matches:[{id, date, opp, type:"serie"|"tr"|"cup", players:[pid], ts,
             gid?, nores?, res?:[egna,insläppta], xgid?, notGid?:[GameID]}],
-  goals:[{id, mid, k?, scorer, a1, a2, ice:[pid], ts}],  // k = tulospalvelus händelse-ID, t.ex. "Goal_9"
-  ga:[{id, mid, k?, ice:[pid], ts}],
+  goals:[{id, mid, k?, so?, pp?, scorer, a1, a2, ice:[pid], ts}],  // k = händelse-ID ("Goal_9"), so = avgörande straffslag, pp = powerplay
+  ga:[{id, mid, k?, so?, pp?, ice:[pid], ts}],
   pens:[{id, mid, pid, min, ts}]
 }]}
 ```
 
-Inställningar för gränssnittet ligger i separata `lp_*`-nycklar (tab, stat, top, hide, ftype, fper, sid, mid, lang, proxy). `changes` räknar bara egna ändringar (sådant som inte kan hämtas igen). `changed(false)` används för hämtad data.
+Inställningar för gränssnittet ligger i separata `lp_*`-nycklar (tab, stat, top, hide, ftype, fper, view, sown, sid, mid, lang, proxy). `changes` räknar bara egna ändringar (sådant som inte kan hämtas igen). `changed(false)` används för hämtad data.
 
 ### Tre sorters matcher
 
@@ -60,14 +63,20 @@ Resultat: räknas från målen om det finns mål (eller om matchen är låst), a
 
 ### Hämtning (`tpSync`)
 
-- Hämtar `getgames`, truppen (`getteamserieroster`, varje gång) och nästa matcher.
+- Hämtar `getgames` med `teamid=0` (alla lags matcher i serien i ett anrop, behövs för tabellen), `getsubserie` (flaggor: publicerar serien statistik och tabell, poäng för vinst), truppen (`getteamserieroster`) och nästa matcher. Sedan `tpSeriesData`: officiell tabell (`getstandings`) om `showStandings`, annars uträknad från alla lags resultat. Serielista (`getplayers`, ett anrop) bara om `playerStatistics`. Totalt 3–5 anrop plus två per ny eller nyligen spelad match.
 - Färdiga matcher med protokoll (`GameStatus===2`, `DeniedResults` falskt, inte i `tpSkip`): nya matcher, matcher från de senaste 30 dagarna, eller alla vid "Kontrollera hela säsongen". För varje match hämtas protokoll och laguppställning, och `tpImportGame` ersätter händelserna.
 - Serier med `DeniedResults` (U10/U11): spelade matcher i schemat läggs in som schemamatcher (`tpScheduleGame`). Tulospalvelu har varken resultat, trupp eller protokoll för dem (kontrollerat för U10 Leijonaliiga: alla matcher står som ej spelade, 0–0, tom tabell). Spelare läggs därför till för hand.
 - **Krock:** en ny match från tulospalvelu samma dag som en egen match importeras inte direkt. Användaren väljer på ett kort i Matcher: "Använd tulospalvelus" (egen match tas bort), "Behåll min" (`tpSkip`) eller "Olika matcher" (`notGid`). För schemamatcher: "Samma match, koppla ihop" (egen match får `gid`) eller "Olika matcher". Krockarna ligger i `S.conflicts` (inte sparade). Nästa hämtning frågar igen om användaren inte valt.
 - Spelare matchas i ordningen tulospalvelus person-ID (`PersonID`/`PlayerID` → `tpid`), namnet som det står i tulospalvelu (`tpName`), tröjnummer. Nummer kan skilja mellan matcher. Namnändringar i appen påverkar inte matchningen. Spelare som läggs till för hand (utan `tpid`) kan tas bort, medan spelare från tulospalvelu bara kan döljas.
 - Mål räknas bara om lagets löpande ställning ökar. Missade straffslag loggas som mål med `GoalType:"RL0"` men ändrar inte ställningen.
+- Avgörande straffslag (`GoalType:"VL"`, period 5) sparas med `so:true`: de räknas i matchresultatet men inte som mål, assist eller +/-.
+- Mål i powerplay (`GoalType` innehåller "YV") sparas med `pp:true` och räknas inte i +/-, precis som i tulospalvelus statistik (de listar ändå vilka som var på isen).
 - +/-: fälten `Plus`/`Minus` (mellanslagsseparerade tröjnummer) används när de finns, och `pm` slås då på. Annars behålls användarens egna På isen per händelse-ID (`k`) vid omhämtning. Officiell +/- vinner över egen.
 - Lagstraff (tröja 0) läggs inte på någon spelare.
+
+### Vyer i Lista
+
+**Laget** (egen statistik), **Hela serien** (bara om serien publicerar spelarstatistik, t.ex. U20: alla spelare i serien, vårt lag markerat, valet "Bara vårt lag") och **Tabell** (officiell eller uträknad, eget lag markerat, slutspelsstreck från `StandingLines`). I Laget visas varje spelares placering i serien ("Serien 43/582") när serielistan finns och inget periodfilter eller träningsfilter är valt. För U13 finns ingen serielista (förbundet publicerar den inte), och vi hämtar avsiktligt inte alla lags matcher för att räkna fram den, eftersom det skulle bli hundratals anrop. Där finns bara tabellen.
 
 ### Filter i Lista
 
@@ -104,6 +113,8 @@ Inget officiellt API, men öppna interna JSON-endpoints (GET, `accept: applicati
 | Matcher | `helpers/getgames` | `season, subSerieId, teamid, districtid=0, gamedays=3, dog=, levelid=-1, dwl=0` |
 | Protokoll | `gamereport/getgamereportdata` | `gameid, season` |
 | Laguppställning per match | `game/helpers/getsummary` | `gameid, season, subSerieId, gamelength` |
+| Seriens spelarstatistik | `helpers/getplayers` | `season, subSerieId, type=0, teamid=0, nop=9999` (tom om serien inte publicerar) |
+| Officiell tabell | `serie/helpers/getstandings` | `season, subSerieId` (poäng 0 om serien inte visar tabell) |
 
 **CORS:** tjänsten skickar inga CORS-headers. Därför går alla anrop via `proxy/worker.js`, **driftsatt på https://tulospalvelu-proxy.matti-rantakangas.workers.dev/** (konstanten `TP_DEFAULT_PROXY`). Workern släpper bara igenom endpointsen ovan. Den uppdateras inte automatiskt från repot: ändras `worker.js` måste den klistras in och driftsättas igen i Cloudflare-panelen. Användaren kan ange en annan proxy under Data → Anslutning (`lp_proxy`).
 
@@ -111,7 +122,8 @@ Inget officiellt API, men öppna interna JSON-endpoints (GET, `accept: applicati
 
 - MIF U13: 14 matcher, 55–88. Spelade matcher, mål, assist och utvisningsminuter per spelare stämmer exakt mot tulospalvelus egna summeringar.
 - SV och FI, filter, skärmbildsläge, egen träningsmatch med resultat och U10 Leijonaliiga (schemamatcher, eget resultat och egna spelare som finns kvar efter ny hämtning) testade i webbläsaren mot riktig data. Inga JS-fel.
-- `node --test test/`: 9 tester (hämtning, låsning och +/- som finns kvar, officiell +/-, krockval, filter och skärmbildsläge, serie utan resultat, dölja och koppla loss, CSV-export och import, språk).
+- `node --test test/`: 13 tester (hämtning, låsning och +/- som finns kvar, officiell +/-, krockval, filter och skärmbildsläge, serie utan resultat, dölja och koppla loss, CSV, språk, uträknad tabell, officiell tabell och serielista, straffläggning, powerplay och +/-).
+- U20 SM-serien (Ässät): matcher, mål, assist, utvisningsminuter och +/- för alla 35 spelare stämmer exakt mot tulospalvelus serielista. MIF U13: den uträknade tabellen stämmer med matchsiffrorna.
 - **Inte testat på riktiga telefoner.**
 
 ## Idéer som inte är gjorda

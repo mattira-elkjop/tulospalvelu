@@ -19,6 +19,8 @@ const ALLOWED = new Set([
   "helpers/getteamserieroster",
   "gamereport/getgamereportdata",
   "game/helpers/getsummary",
+  "helpers/getplayers",
+  "serie/helpers/getstandings",
 ]);
 
 const CORS = {
