@@ -103,10 +103,11 @@ function filterLabel(){
 
 /* ---------- statistik ---------- */
 function computeStats(ms){
-  const s=cur(),m=new Map(players.map(p=>[p.id,{p,gp:0,g:0,a:0,u:0,pm:0}]));
+  const s=cur(),m=new Map(players.map(p=>[p.id,{p,gp:0,g:0,a:0,u:0,pm:0,ggp:0,sv:0,gga:0,gw:0,gsec:0}]));
   ms=ms||s.matches;const ids=new Set(ms.map(x=>x.id));
   const inc=(id,f,v)=>{const o=m.get(id);if(o)o[f]+=v};
   ms.forEach(x=>uniq(x.players).forEach(id=>inc(id,"gp",1)));
+  ms.forEach(x=>(x.gk||[]).forEach(q=>{inc(q.pid,"ggp",1);inc(q.pid,"sv",q.sv||0);inc(q.pid,"gga",q.ga||0);inc(q.pid,"gw",q.w||0);inc(q.pid,"gsec",q.sec||0)}));
   s.goals.filter(x=>ids.has(x.mid)&&!x.so).forEach(x=>{inc(x.scorer,"g",1);[x.a1,x.a2].forEach(a=>a&&inc(a,"a",1));if(s.pm&&!x.pp)uniq(x.ice).forEach(id=>inc(id,"pm",1))});
   if(s.pm)s.ga.filter(x=>ids.has(x.mid)&&!x.so&&!x.pp).forEach(x=>uniq(x.ice).forEach(id=>inc(id,"pm",-1)));
   s.pens.filter(x=>ids.has(x.mid)).forEach(x=>inc(x.pid,"u",Number(x.min)||0));
@@ -116,7 +117,7 @@ function statKey(){const s=cur();if(S.stat==="pm"&&!s.pm)S.stat="pts";return S.s
 function leaderboard(){
   const k=statKey();
   const cmp={pts:(x,y)=>y.pts-x.pts||y.g-x.g||x.gp-y.gp,g:(x,y)=>y.g-x.g||y.pts-x.pts||x.gp-y.gp,a:(x,y)=>y.a-x.a||y.pts-x.pts||x.gp-y.gp,u:(x,y)=>y.u-x.u||y.gp-x.gp,pm:(x,y)=>y.pm-x.pm||y.gp-x.gp}[k];
-  let rows=computeStats(fMatches()).filter(r=>!r.p.hide).sort((x,y)=>cmp(x,y)||nrCmp(x.p,y.p));
+  let rows=computeStats(fMatches()).filter(r=>!r.p.hide&&r.p.pos!=="MV").sort((x,y)=>cmp(x,y)||nrCmp(x.p,y.p));
   if(S.hide)rows=rows.filter(r=>k==="pm"?r.gp>0:r[k]>0);
   let rank=0,prev=null;
   rows.forEach((r,i)=>{if(r[k]!==prev){rank=i+1;prev=r[k]}r.rank=rank});
@@ -136,7 +137,8 @@ function banner(){
 }
 /* ---------- serien: tabell och spelarlista (från tulospalvelu) ---------- */
 const SKEY={pts:"pts",g:"g",a:"a",u:"u",pm:"pm"};
-function views(){const s=cur(),v=[["lag",T("Laget","Joukkue")]];if(s.tpSeries&&s.tpSeries.length)v.push(["serie",T("Hela serien","Koko sarja")]);if(s.tpTable&&s.tpTable.rows.length)v.push(["tabell",T("Tabell","Sarjataulukko")]);return v}
+const hasGk=s=>s.players.some(p=>p.pos==="MV"&&!p.hide)||s.matches.some(m=>m.gk&&m.gk.length);
+function views(){const s=cur(),v=[["lag",T("Utespelare","Pelaajat")]];if(hasGk(s))v.push(["mv",T("Målvakter","Maalivahdit")]);if(s.tpSeries&&s.tpSeries.length)v.push(["serie",T("Serien","Sarja")]);if(s.tpTable&&s.tpTable.rows.length)v.push(["tabell",T("Tabell","Taulukko")]);return v}
 function view(){return views().some(([v])=>v===S.view)?S.view:"lag"}
 /* Rangordning i serien för en statistik (delad placering vid lika värde) */
 function seriesRanked(k){
@@ -197,10 +199,42 @@ function viewSeries(){
     <label><input type="checkbox" id="hide" ${S.hide?"checked":""}> ${T("Dölj nollor","Piilota nollat")}</label></div>`;
   return viewSwitch()+seg+ctrls+listButtons()+card+`<p class="note">${T("Statistiken för hela serien kommer direkt från tulospalvelu och gäller seriematcherna. Vårt lag är markerat.","Koko sarjan tilastot tulevat suoraan tulospalvelusta ja koskevat sarjaotteluita. Oma joukkue on korostettu.")}</p>`;
 }
+const selEl=(id,opts,v)=>`<select class="in" id="${id}" style="width:auto;min-height:40px">${opts.map(([o,t])=>`<option value="${o}" ${String(v)===o?"selected":""}>${esc(t)}</option>`).join("")}</select>`;
+function filterCtrls(){
+  const types=typesIn(cur());
+  const typeSel=types.length>1?`<label>${T("Matcher","Ottelut")} ${selEl("f-type",[["all",T("Alla","Kaikki")],...["serie","tr","cup"].filter(t=>types.includes(t)).map(t=>[t,MT()[t][1]])],ftype())}</label>`:"";
+  const perSel=`<label>${T("Period","Jakso")} ${selEl("f-per",[["all",T("Hela säsongen","Koko kausi")],["5",T("Senaste 5","Viimeiset 5")],["10",T("Senaste 10","Viimeiset 10")]],S.fper)}</label>`;
+  return `<div class="ctrls">${typeSel}${perSel}</div>`;
+}
+/* Målvakter: matcher i mål, vinster, minuter, räddningar, insläppta, räddningsprocent */
+const fmtPct=p=>p<0?"-":(p*100).toFixed(1).replace(".",",");
+function goalieRows(){
+  let rows=computeStats(fMatches()).filter(r=>!r.p.hide&&(r.p.pos==="MV"||r.ggp>0)).map(r=>({...r,pct:r.sv+r.gga?r.sv/(r.sv+r.gga):-1,min:Math.round(r.gsec/60)}));
+  if(S.hide)rows=rows.filter(r=>r.ggp>0);
+  rows.sort((x,y)=>y.pct-x.pct||y.gw-x.gw||y.ggp-x.ggp||nrCmp(x.p,y.p));
+  let rank=0,prev=null;rows.forEach((r,i)=>{if(r.pct!==prev){rank=i+1;prev=r.pct}r.rank=rank});
+  return rows;
+}
+function viewGoalies(){
+  const s=cur(),rows=goalieRows(),fl=filterLabel();
+  const tot=rows.reduce((a,r)=>({sv:a.sv+r.sv,ga:a.ga+r.gga}),{sv:0,ga:0});
+  const cols=[["ggp",T("Mat","O")],["gw","V"],["min","Min"],["sv",T("Rädd","Torj")],["gga",T("Insl","PM")],["pct","%"]];
+  const tmpl="26px 26px minmax(0,1fr) 28px 24px 38px 38px 32px 44px";
+  const head=`<div class="row head"><div>#</div><div>Nr</div><div class="nm nmh">${T("Målvakt","Maalivahti")}</div>${cols.map(([c,t])=>`<div class="${c==="pct"?"hlh":""}">${t}</div>`).join("")}</div>`;
+  const body=rows.length?rows.map(r=>`<div class="row"><div class="rk ${r.rank<=3&&r.pct>=0?"r"+r.rank:""}">${r.rank}</div><div class="mu">${esc(r.p.nr)}</div><div class="nm"><span>${esc(r.p.name)}</span></div><div class="gpc">${r.ggp||"-"}</div><div class="${r.gw?"":"mu"}">${r.gw||"-"}</div><div class="mu">${r.min||"-"}</div><div>${r.sv||"-"}</div><div>${r.gga||"-"}</div><div class="hl">${fmtPct(r.pct)}</div></div>`).join("")
+    :`<div class="empty">${T("Ingen målvaktsstatistik ännu. Den hämtas från matchprotokollen i tulospalvelu.","Ei vielä maalivahtitilastoja. Ne haetaan tulospalvelun otteluraporteista.")}</div>`;
+  const card=`<div class="banner" ${S.shot?'data-a="unshot"':''}><h1>${esc(s.lag)} · ${T("Målvakter","Maalivahdit")}</h1><p>${esc([s.serie,s.sasong].filter(Boolean).join(" · "))}${fl?`<br><b class="flt">${esc(fl)}</b>`:""}</p></div>
+    <div class="totals">${T("Lag","Joukkue")}: ${tot.sv} ${T("räddningar","torjuntaa")} · ${tot.ga} ${T("insläppta","päästettyä")} · ${fmtPct(tot.sv+tot.ga?tot.sv/(tot.sv+tot.ga):-1)} %</div>
+    <div class="table" style="--cols:${tmpl}">${head}${body}</div>`;
+  if(S.shot)return card+`<div class="hint"><span>${T("Tryck på rubriken för att avsluta","Lopeta napauttamalla otsikkoa")}</span></div>`;
+  const ctrls=`${filterCtrls()}<div class="ctrls"><label><input type="checkbox" id="hide" ${S.hide?"checked":""}> ${T("Dölj målvakter utan matcher","Piilota maalivahdit ilman otteluita")}</label></div>${listButtons()}`;
+  return viewSwitch()+ctrls+card+`<p class="note">${T("Mat = matcher i mål. V = vinster (målvakten i mål vid det avgörande målet). Min = minuter i mål. % = räddningar delat med skott på mål. Mål i tom kasse och avgörande straffslag räknas inte. Statistiken kommer från matchprotokollen i tulospalvelu, så egna matcher saknar målvaktsstatistik.","O = ottelut maalissa. V = voitot (maalivahti maalissa ratkaisevan maalin aikana). Min = minuutit maalissa. % = torjunnat jaettuna maalia kohti laukauksilla. Tyhjiin maaleihin tehtyjä maaleja ja voittolaukauksia ei lasketa. Tilastot tulevat tulospalvelun otteluraporteista, joten omista otteluista ei ole maalivahtitilastoja.")}</p>`;
+}
 function viewLista(){
   const s=cur();if(!s)return emptyState();
   if(view()==="tabell")return viewTable();
   if(view()==="serie")return viewSeries();
+  if(view()==="mv")return viewGoalies();
   const k=statKey(),rows=leaderboard();
   const showRank=s.tpSeries&&s.tpSeries.length&&S.fper==="all"&&ftype()!=="tr"&&ftype()!=="cup"&&SKEY[k];
   const cols=[["gp",T("Mat","O")],["g",T("Mål","M")],["a",T("Ass","S")],["pts","P"],["u",T("Utv","RM")]];if(s.pm)cols.push(["pm","+/-"]);
@@ -216,10 +250,8 @@ function viewLista(){
   if(S.shot)return card+`<div class="hint"><span>${T("Tryck på rubriken för att avsluta","Lopeta napauttamalla otsikkoa")}</span></div>`;
   const segs=[["pts",T("Poäng","Pisteet")],["g",T("Mål","Maalit")],["a",T("Assist","Syötöt")],["u",T("Utv","Jäähyt")]];if(s.pm)segs.push(["pm","+/-"]);
   const seg=`<div class="seg" style="grid-template-columns:repeat(${segs.length},1fr)">${segs.map(([v,t])=>`<button data-a="stat" data-v="${v}" aria-pressed="${k===v}">${t}</button>`).join("")}</div>`;
-  const types=typesIn(s),sel=(id,opts,v)=>`<select class="in" id="${id}" style="width:auto;min-height:40px">${opts.map(([o,t])=>`<option value="${o}" ${String(v)===o?"selected":""}>${esc(t)}</option>`).join("")}</select>`;
-  const typeSel=types.length>1?`<label>${T("Matcher","Ottelut")} ${sel("f-type",[["all",T("Alla","Kaikki")],...["serie","tr","cup"].filter(t=>types.includes(t)).map(t=>[t,MT()[t][1]])],ftype())}</label>`:"";
-  const perSel=`<label>${T("Period","Jakso")} ${sel("f-per",[["all",T("Hela säsongen","Koko kausi")],["5",T("Senaste 5","Viimeiset 5")],["10",T("Senaste 10","Viimeiset 10")]],S.fper)}</label>`;
-  const ctrls=`<div class="ctrls">${typeSel}${perSel}</div>
+  const sel=selEl;
+  const ctrls=`${filterCtrls()}
   <div class="ctrls"><label>${T("Visa","Näytä")} ${sel("topn",[["alla",T("Alla","Kaikki")],["5","Top 5"],["10","Top 10"],["15","Top 15"],["20","Top 20"]],S.top)}</label>
   <label><input type="checkbox" id="hide" ${S.hide?"checked":""}> ${k==="pm"?T("Dölj spelare utan matcher","Piilota pelaajat ilman otteluita"):T("Dölj nollor","Piilota nollat")}</label></div>
   ${listButtons()}`;
@@ -312,6 +344,7 @@ function viewMatch(m){
   return `<button class="link" data-a="m-back">← ${T("Alla matcher","Kaikki ottelut")}</button>
   <div class="card"><div class="mh-top"><div><h2 style="margin:0;text-transform:capitalize">${esc(fmtDate(m.date))}</h2><div class="sub">${m.opp?T("Mot ","Vastaan ")+esc(m.opp):T("Motståndare ej angiven","Vastustajaa ei annettu")} · ${MT()[mtype(m)][0]}</div></div><div class="score">${fmtScore(score(m))}</div></div>
     <p class="note">${m.players.length} ${T("spelare","pelaajaa")}: ${esc(nrs(m.players))||T("inga valda","ei valittu")}</p>
+    ${(m.gk||[]).length?`<p class="note">${T("Målvakt","Maalivahti")}: ${m.gk.map(q=>esc(plabel(q.pid))+" ("+q.sv+" "+T("rädd.","torj.")+", "+q.ga+" "+T("insl.","päästetty")+", "+Math.round((q.sec||0)/60)+" min"+(q.w?", "+T("vinst","voitto"):"")+")").join(" · ")}</p>`:""}
     ${info||link?`<p class="note">${info}${link}</p>`:""}
     ${lk?"":`<button class="btn small" data-a="mf-edit">${T("Ändra resultat och spelare","Muokkaa tulosta ja pelaajia")}</button>`}</div>
   ${lk?(S.ev?editor(m):""):(S.ev?editor(m):acts)}
@@ -495,6 +528,7 @@ function toCSV(){
     const ms=s.matches.slice().sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))||(a.ts||0)-(b.ts||0));
     const key=new Map(ms.map((m,i)=>[m.id,"m"+(i+1)]));
     ms.forEach(m=>R({typ:"match",m:key.get(m.id),d:m.date,o:m.opp,l:list(m.players),id:m.gid,mt:mtype(m)==="serie"&&m.nores?"serie0":mtype(m),res:Array.isArray(m.res)?m.res.join("-"):""}));
+    ms.forEach(m=>(m.gk||[]).forEach(q=>R({typ:"malvakt",m:key.get(m.id),d:m.date,o:m.opp,nr:nrOf(q.pid),res:(q.sv||0)+"-"+(q.ga||0),min:Math.round((q.sec||0)/6)/10,pos:q.w?"V":""})));
     const mm=id=>s.matches.find(m=>m.id===id)||{};
     [...s.goals.map(x=>["mal",x]),...s.ga.map(x=>["slappt",x]),...s.pens.map(x=>["utvisning",x])].sort((a,b)=>(a[1].ts||0)-(b[1].ts||0)).forEach(([t,x])=>{
       const m=mm(x.mid),base={typ:t,m:key.get(x.mid)||"",d:m.date,o:m.opp};
@@ -569,7 +603,7 @@ function parseImport(text){
   });
   const place=(s,r,line,ev)=>{const m=s._mk.get(g(r,"match"));if(!m){W(line,"händelse utan match hoppades över","tapahtuma ilman ottelua ohitettiin");return null}ev.mid=m.id;const k=g(r,"tp_id");if(k)ev.k=k;const fl=g(r,"pos").toUpperCase();if(fl==="VL")ev.so=true;if(fl==="YV")ev.pp=true;return ev};
   body.forEach(({r,line,t})=>{
-    const s=t==="mal"||t==="slappt"||t==="utvisning"?seasonOf(r):null;let ev;
+    const s=t==="mal"||t==="slappt"||t==="utvisning"||t==="malvakt"?seasonOf(r):null;let ev;
     if(t==="mal"){
       const sc=find(s,g(r,"nr"));
       if(!sc){W(line,"målskytt "+g(r,"nr")+" finns inte, målet hoppades över","maalintekijää "+g(r,"nr")+" ei ole, maali ohitettiin");return}
@@ -577,6 +611,10 @@ function parseImport(text){
       if(ev=place(s,r,line,{id:uid(),scorer:sc.id,a1:a[0],a2:a[1],ice:ids(s,g(r,"spelare_nr"),line),ts:++n}))s.goals.push(ev);
     }else if(t==="slappt"){
       if(ev=place(s,r,line,{id:uid(),ice:ids(s,g(r,"spelare_nr"),line),ts:++n}))s.ga.push(ev);
+    }else if(t==="malvakt"){
+      const m=s._mk.get(g(r,"match")),p=find(s,g(r,"nr")),rm=g(r,"resultat").match(/^(\d+)\s*[-–]\s*(\d+)$/);
+      if(!m||!p||!rm){W(line,"målvaktsrad utan match, nummer eller räddningar hoppades över","maalivahtirivi ilman ottelua, numeroa tai torjuntoja ohitettiin");return}
+      (m.gk=m.gk||[]).push({pid:p.id,sv:Number(rm[1]),ga:Number(rm[2]),w:g(r,"pos").toUpperCase()==="V"?1:0,sec:Math.round((Number(String(g(r,"minuter")).replace(",","."))||0)*60)});
     }else if(t==="utvisning"){
       const p=find(s,g(r,"nr")),min=Number(String(g(r,"minuter")).replace(",","."));
       if(!p||!(min>0)){W(line,"utvisning utan giltigt nummer eller minuter hoppades över","jäähy ilman kelvollista numeroa tai minuutteja ohitettiin");return}
@@ -670,7 +708,7 @@ function tpImportGame(s,g,rep,sum,added){
   roster.forEach(r=>{const p=tpPlayer(s,{tpid:r.PersonID,nr:r.JerseyNr,name:tpName(r.FirstName,r.LastName),role:r.RoleAbbrv},added);if(p)jersey.set(Number(r.JerseyNr),p.id)});
   const byLog=(nr,name)=>{nr=Number(nr);if(!(nr>0))return null;if(jersey.has(nr))return jersey.get(nr);const p=tpPlayer(s,{nr,name:name?tpLogName(name):""},added);if(p)jersey.set(nr,p.id);return p?p.id:null};
   const ice=str=>uniq(tpNrs(str).map(x=>byLog(x)));
-  let pmSeen=false,skipped=0,teamPen=0,pH=0,pA=0;
+  let pmSeen=false,skipped=0,teamPen=0,pH=0,pA=0;const gfT=[],gaT=[];let end=Number(g.GameEffTime)||0;
   const logs=(rep.GameLogsUpdate||[]).slice().sort((a,b)=>(a.Period-b.Period)||(a.GameTime-b.GameTime));
   logs.forEach((l,i)=>{
     const ts=base+(Number(l.GameTime)||0)*1000+i;
@@ -683,12 +721,15 @@ function tpImportGame(s,g,rep,sum,added){
       const k=l.Key||null;
       /* Avgörande straffslag (GoalType "VL", period 5) räknas i resultatet men inte i spelarstatistiken */
       if(l.GoalType==="VL"||Number(l.Period)>=5){
+        end=Math.max(end,Number(l.GameTime)||0);
         if(l.TeamId===tid)s.goals.push({id:uid(),mid:m.id,k,so:true,scorer:byLog(l.ScorerJersey,l.ScorerName),a1:null,a2:null,ice:[],ts});
         else s.ga.push({id:uid(),mid:m.id,k,so:true,ice:[],ts});
         return;
       }
       /* Mål i powerplay (YV) räknas inte i +/- enligt tulospalvelus statistik */
       const pp=/YV/.test(l.GoalType||"")?{pp:true}:{};
+      (l.TeamId===tid?gfT:gaT).push(Number(l.GameTime)||0);
+      if(Number(l.Period)===4)end=Math.max(end,Number(l.GameTime)||0);
       if(l.TeamId===tid){
         const sc=byLog(l.ScorerJersey,l.ScorerName);
         if(!sc){skipped++;return}
@@ -703,9 +744,34 @@ function tpImportGame(s,g,rep,sum,added){
       if(pid&&min>0)s.pens.push({id:uid(),mid:m.id,pid,min,ts});else if(min>0)teamPen++;
     }
   });
+  m.gk=tpGoalies(rep,logs,tid,home?g.HomeTeamAbbrv:g.AwayTeamAbbrv,gfT,gaT,s.goals.some(x=>x.mid===m.id&&x.so),byLog,end);
   if(roster.length)m.players=uniq([...jersey.values()]);
   fixSeason(s);
   return {pmSeen,skipped,teamPen};
+}
+/* Målvakter i en match: räddningar från protokollets målvaktssammanställning. Insläppta, vinst och
+   minuter från tidslinjen (GK_start, GK_change, GK_out = målvakten ute, GK_in = tillbaka).
+   Mål i tom kasse belastar ingen målvakt. Vinsten går till målvakten i mål vid det avgörande målet,
+   vid straffläggning till den som stod i mål sist. end = matchens slut i sekunder. */
+function tpGoalies(rep,logs,tid,abbr,gfT,gaT,soWin,byLog,end){
+  const ev=logs.filter(l=>l.TeamId===tid&&/^GK_/.test(l.Type)).map(l=>({t:Number(l.GameTime)||0,out:l.Type==="GK_out",j:Number(l.GoalkeeperJersey)||0})).sort((a,b)=>a.t-b.t);
+  const inNet=t=>{let c=null;ev.forEach(e=>{if(e.t<t)c=e.out?null:(e.j||null)});return c};
+  const lastIn=t=>{let c=null;ev.forEach(e=>{if(e.t<t&&!e.out&&e.j)c=e.j});return c};
+  const appeared=new Set(ev.filter(e=>!e.out&&e.j).map(e=>e.j));
+  const sums=rep.GoalkeeperSummary||[];
+  const team=sums.find(t=>(t.TeamGoalkeepers||[]).some(k=>appeared.has(Number(k.GkJersey))))||sums.find(t=>t.TeamName===abbr);
+  const st=new Map(),get=j=>{if(!st.has(j))st.set(j,{sv:0,ga:0,w:0,sec:0});return st.get(j)};
+  appeared.forEach(get);
+  ((team&&team.TeamGoalkeepers)||[]).forEach(k=>{const j=Number(k.GkJersey),tot=(k.GkSaves||[]).find(x=>Number(x.Period)===0),sv=tot?Number(tot.Saves)||0:0;if(sv>0||appeared.has(j))get(j).sv=sv});
+  gaT.forEach(t=>{const j=inNet(t);if(j)get(j).ga++});
+  let curJ=null,since=0;
+  ev.forEach(e=>{if(curJ)get(curJ).sec+=Math.max(0,e.t-since);curJ=e.out?null:(e.j||null);since=e.t});
+  if(curJ)get(curJ).sec+=Math.max(0,Math.max(end,since)-since);
+  if(st.size&&(gfT.length>gaT.length||soWin)){
+    const j=soWin||gfT.length<=gaT.length?lastIn(Infinity):(inNet(gfT[gaT.length])||lastIn(gfT[gaT.length]));
+    if(j)get(j).w=1;
+  }
+  return [...st].map(([j,x])=>{const pid=byLog(j);return pid?{pid,...x}:null}).filter(Boolean);
 }
 /* Match i en serie där tulospalvelu inte visar resultat (t.ex. U10/U11): bara datum och motståndare
    uppdateras. Resultat, spelare och händelser fyller användaren i själv. */
@@ -779,7 +845,8 @@ async function tpSync(full){
     /* Serier med protokoll */
     const cut=new Date(Date.now()-TP_RECENT_DAYS*864e5).toISOString().slice(0,10);
     const done=games.filter(g=>g.GameStatus===2&&!g.DeniedResults&&!skip.has(g.GameID));
-    const todo=done.filter(g=>full||!have.has(g.GameID)||normDate(g.GameDate)>=cut);
+    const noGk=new Set(s.matches.filter(m=>m.gid&&!m.nores&&!m.gk).map(m=>m.gid));
+    const todo=done.filter(g=>full||!have.has(g.GameID)||normDate(g.GameDate)>=cut||noGk.has(g.GameID));
     for(const g of todo){
       n++;S.sync={msg:T(`Hämtar match ${n} av ${todo.length}…`,`Haetaan ottelua ${n}/${todo.length}…`)};render(true);
       const [rep,sum]=await Promise.all([
@@ -957,6 +1024,7 @@ function shareText(){
     let rows=seriesRanked(kk);if(S.hide)rows=rows.filter(r=>kk==="pm"?r.gp>0:(r[kk]||0)>0);if(S.sown)rows=rows.filter(r=>r.tid===s.tp.tid);if(S.top!=="alla")rows=rows.slice(0,Number(S.top));
     return [(s.serie||s.lag)+" · "+TITLES()[kk],T("Hela serien","Koko sarja")+" · "+(s.sasong||""),"",...rows.map(r=>r.rank+". "+r.n+" ("+r.t+") "+(kk==="pm"?fmtPM(r.pm):(r[kk]||0)))].join("\n");
   }
+  if(v==="mv")return [s.lag+" · "+T("Målvakter","Maalivahdit"),[s.serie,s.sasong,filterLabel()].filter(Boolean).join(" · "),"",...goalieRows().map(r=>r.rank+". "+r.p.name+" (#"+r.p.nr+") "+fmtPct(r.pct)+" %, "+r.gw+" "+T("vinster","voittoa")+", "+r.ggp+" "+T("m","o")+", "+r.min+" min")].join("\n");
   return ownShareText();
 }
 function ownShareText(){

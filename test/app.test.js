@@ -58,8 +58,8 @@ function makeApp(data, opts = {}) {
       calls.push(p);
       let body;
       if (p === "helpers/getgames") body = [{ Games: data.games }];
-      else if (p === "helpers/getteamserieroster") body = { Players: ROSTER };
-      else if (p === "gamereport/getgamereportdata") body = { GamesUpdate: [{ Id: Number(q.gameid) }], GameLogsUpdate: data.reports[q.gameid] || [] };
+      else if (p === "helpers/getteamserieroster") body = { Players: data.squad || ROSTER };
+      else if (p === "gamereport/getgamereportdata") body = { GamesUpdate: [{ Id: Number(q.gameid) }], GameLogsUpdate: data.reports[q.gameid] || [], GoalkeeperSummary: (data.gk || {})[q.gameid] || [] };
       else if (p === "game/helpers/getsummary") body = { HomeTeamGameRoster: { Players: data.rosters[q.gameid] || [] }, AwayTeamGameRoster: { Players: [] } };
       else if (p === "serie/helpers/getsubserie") body = data.sub || { playerStatistics: false, showStandings: false, winPoints: 2, serieId: 9 };
       else if (p === "serie/helpers/getstandings" && data.standings) body = data.standings;
@@ -243,7 +243,7 @@ test("serietabell uträknad från alla lags matcher (inget extra anrop)", async 
   assert.equal(t.official, false);
   // Hem: V + O = 3 p, Tredje: V = 2 p, Borta: O + F + F = 1 p
   assert.deepEqual(plain(t.rows.map(r => [r.rank, r.name, r.gp, r.pts])), [[1, "Hem", 2, 3], [2, "Tredje", 1, 2], [3, "Borta", 3, 1]]);
-  assert.deepEqual(plain(A.views().map(v => v[0])), ["lag", "tabell"], "ingen Hela serien-vy utan serielista");
+  assert.deepEqual(plain(A.views().map(v => v[0])), ["lag", "mv", "tabell"], "ingen Hela serien-vy utan serielista");
   A.S.view = "tabell";
   const html = A.viewLista();
   assert.match(html, /class="row own"/, "eget lag markerat");
@@ -265,7 +265,7 @@ test("serie med statistik: officiell tabell, hela serien och egna spelares place
   const s = A.cur();
   assert.equal(s.tpTable.official, true);
   assert.deepEqual(plain(s.tpTable.rows.map(r => [r.rank, r.name, r.w, r.l, r.pts])), [[1, "Borta", 2, 0, 5], [2, "Hem", 1, 1, 4]]);
-  assert.deepEqual(plain(A.views().map(v => v[0])), ["lag", "serie", "tabell"]);
+  assert.deepEqual(plain(A.views().map(v => v[0])), ["lag", "mv", "serie", "tabell"]);
   // Egen lista: #5 (tpid 1) har 2 p och är 2:a av 4 i serien
   assert.deepEqual({ ...A.seriesRankOf(1, "pts") }, { rank: 2, of: 4 });
   assert.match(A.viewLista(), /Serien 2\/4/);
@@ -303,4 +303,37 @@ test("mål i powerplay (YV) räknas inte i +/-", async () => {
   assert.equal(stat(A, 7).pm, 1, "#7: YV-målet räknas inte, Goal_3 räknas");
   const imp = A.parseImport(A.toCSV());
   assert.equal(imp.seasons[0].goals.filter(x => x.pp).length, 1);
+});
+
+test("målvakter: räddningar, insläppta, vinst, minuter och tom kasse", async () => {
+  const d = baseData();
+  const GK2 = P(5, "Testi", "EPSILON", 91, "MV");
+  d.squad = [...ROSTER, GK2];
+  d.rosters[1001] = [...d.rosters[1001], GK2];
+  const gke = (type, t, j) => ({ Type: type, TeamId: TID, Period: t < 900 ? 1 : t < 1800 ? 2 : 3, GameTime: t, GoalkeeperJersey: j });
+  const sum = list => [{ TeamName: "Hem", TeamGoalkeepers: list.map(([j, sv]) => ({ GkJersey: j, GkSaves: [{ Period: 0, Saves: sv }] })) }];
+  // 1001 (2–1): #90 börjar, byts mot #91 vid 1800. Insläppt vid 1500 (#90), avgörande mål vid 2500 (#91 i mål)
+  d.reports[1001].push(gke("GK_start", 0, 90), gke("GK_change", 1800, 91));
+  d.gk = { 1001: sum([[90, 10], [91, 5]]), 1002: sum([[90, 20]]) };
+  // 1002 (1–1): #90 tas ut vid 2550, kvitteringen vid 2600 går i tom kasse
+  d.reports[1002].push(gke("GK_start", 0, 90), gke("GK_out", 2550, 0));
+  const A = makeApp(d);
+  await A.tpSync(false);
+  const g90 = stat(A, 90), g91 = stat(A, 91);
+  assert.deepEqual([g90.ggp, g90.sv, g90.gga, g90.gw, g90.gsec], [2, 30, 1, 0, 1800 + 2550]);
+  assert.deepEqual([g91.ggp, g91.sv, g91.gga, g91.gw, g91.gsec], [1, 5, 0, 1, 900]);
+  assert.ok(A.views().some(v => v[0] === "mv"));
+  A.S.hide = false;
+  assert.equal(A.leaderboard().some(r => r.p.pos === "MV"), false, "målvakter syns inte bland utespelarna");
+  A.S.view = "mv";
+  const html = A.viewLista();
+  assert.match(html, /Målvakter/); assert.match(html, /100,0/); assert.match(html, /96,8/);
+  A.S.shot = true;
+  assert.doesNotMatch(A.viewLista(), /id="hide"|data-a="view"/);
+  const imp = A.parseImport(A.toCSV());
+  assert.equal(imp.warnings.length, 0, imp.warnings.join("\n"));
+  const gk = imp.seasons[0].matches.flatMap(m => m.gk || []);
+  assert.equal(gk.length, 3);
+  assert.equal(gk.reduce((a, q) => a + q.sv, 0), 35);
+  assert.equal(gk.reduce((a, q) => a + q.sec, 0), 1800 + 2550 + 900);
 });

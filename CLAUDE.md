@@ -42,7 +42,8 @@ D = { v:2, last:ISO|null, changes:Number, seasons:[{
   // tp.flags={stats,standings,winPoints}, tp.abbr = lagets förkortning i serien
   players:[{id, nr, name, pos:"UP"|"MV", tpid?, tpName?, hide?}],
   matches:[{id, date, opp, type:"serie"|"tr"|"cup", players:[pid], ts,
-            gid?, nores?, res?:[egna,insläppta], xgid?, notGid?:[GameID]}],
+            gid?, nores?, res?:[egna,insläppta], xgid?, notGid?:[GameID],
+            gk?:[{pid, sv, ga, w:0|1, sec}]}],               // målvakter i matchen (från protokollet)
   goals:[{id, mid, k?, so?, pp?, scorer, a1, a2, ice:[pid], ts}],  // k = händelse-ID ("Goal_9"), so = avgörande straffslag, pp = powerplay
   ga:[{id, mid, k?, so?, pp?, ice:[pid], ts}],
   pens:[{id, mid, pid, min, ts}]
@@ -73,10 +74,11 @@ Resultat: räknas från målen om det finns mål (eller om matchen är låst), a
 - Mål i powerplay (`GoalType` innehåller "YV") sparas med `pp:true` och räknas inte i +/-, precis som i tulospalvelus statistik (de listar ändå vilka som var på isen).
 - +/-: fälten `Plus`/`Minus` (mellanslagsseparerade tröjnummer) används när de finns, och `pm` slås då på. Annars behålls användarens egna På isen per händelse-ID (`k`) vid omhämtning. Officiell +/- vinner över egen.
 - Lagstraff (tröja 0) läggs inte på någon spelare.
+- Målvakter (`tpGoalies`): räddningar från `GoalkeeperSummary` (GkSaves, Period 0 = totalt). Insläppta, vinst och minuter från tidslinjen `GK_start`/`GK_change`/`GK_out` (målvakten ute)/`GK_in`. Mål i tom kasse och avgörande straffslag belastar ingen målvakt. Vinsten går till målvakten i mål vid det avgörande målet (lagets mål nr motståndarens slutsumma + 1), vid straffläggning till den som stod i mål sist. Minuter räknas till matchens slut (`GameEffTime`, eller sista målet i förlängningen eller straffläggningen). Tulospalvelu räknar inte vinster eller minuter själv (0 i deras lista), så de kan inte verifieras mot den. Låsta matcher utan `gk` hämtas om en gång (migrering).
 
 ### Vyer i Lista
 
-**Laget** (egen statistik), **Hela serien** (bara om serien publicerar spelarstatistik, t.ex. U20: alla spelare i serien, vårt lag markerat, valet "Bara vårt lag") och **Tabell** (officiell eller uträknad, eget lag markerat, slutspelsstreck från `StandingLines`). I Laget visas varje spelares placering i serien ("Serien 43/582") när serielistan finns och inget periodfilter eller träningsfilter är valt. För U13 finns ingen serielista (förbundet publicerar den inte), och vi hämtar avsiktligt inte alla lags matcher för att räkna fram den, eftersom det skulle bli hundratals anrop. Där finns bara tabellen.
+**Utespelare** (egen statistik, målvakter (`pos:"MV"`) visas inte här), **Målvakter** (matcher i mål, vinster, minuter, räddningar, insläppta, räddnings%, med samma filter för matchtyp och period), **Hela serien** (bara om serien publicerar spelarstatistik, t.ex. U20: alla spelare i serien, vårt lag markerat, valet "Bara vårt lag") och **Tabell** (officiell eller uträknad, eget lag markerat, slutspelsstreck från `StandingLines`). I Laget visas varje spelares placering i serien ("Serien 43/582") när serielistan finns och inget periodfilter eller träningsfilter är valt. För U13 finns ingen serielista (förbundet publicerar den inte), och vi hämtar avsiktligt inte alla lags matcher för att räkna fram den, eftersom det skulle bli hundratals anrop. Där finns bara tabellen.
 
 ### Filter i Lista
 
@@ -96,7 +98,8 @@ Kolumner: `typ;lag;serie;sasong;match;datum;motstandare;nr;namn;pos;assist1_nr;a
 - `installning`: `namn`=plusminus (nr 0/1), tp_season/tp_serieid/tp_lagid/tp_serie (nr), tp_bortvalda (GameID:n i `spelare_nr`).
 - `spelare`: nr, namn, pos, `tp_id`=person-ID, `dold`=1.
 - `match`: match (nyckel m1, m2 …), datum, motstandare, spelare_nr, `tp_id`=GameID, `matchtyp` serie/serie0/tr/cup (serie0 = schemamatch), `resultat` t.ex. 5-3.
-- `mal`: match, nr, assist1_nr, assist2_nr, spelare_nr (på isen), `tp_id`=händelse-ID. `slappt`: match, spelare_nr, tp_id. `utvisning`: match, nr, minuter.
+- `mal`: match, nr, assist1_nr, assist2_nr, spelare_nr (på isen), `tp_id`=händelse-ID, `pos`=VL (avgörande straffslag) eller YV (powerplay). `slappt`: match, spelare_nr, tp_id, pos. `utvisning`: match, nr, minuter.
+- `malvakt`: match, nr, `resultat`=räddningar-insläppta (t.ex. 23-1), `minuter`=minuter i mål (decimaler), `pos`=V vid vinst.
 - `spelare_nr` är mellanslagsseparerade nummer (komma är decimaltecken i finsk Excel). Det gamla v1-formatet stöds inte längre.
 
 ## tulospalvelu.leijonat.fi
@@ -122,8 +125,8 @@ Inget officiellt API, men öppna interna JSON-endpoints (GET, `accept: applicati
 
 - MIF U13: 14 matcher, 55–88. Spelade matcher, mål, assist och utvisningsminuter per spelare stämmer exakt mot tulospalvelus egna summeringar.
 - SV och FI, filter, skärmbildsläge, egen träningsmatch med resultat och U10 Leijonaliiga (schemamatcher, eget resultat och egna spelare som finns kvar efter ny hämtning) testade i webbläsaren mot riktig data. Inga JS-fel.
-- `node --test test/`: 13 tester (hämtning, låsning och +/- som finns kvar, officiell +/-, krockval, filter och skärmbildsläge, serie utan resultat, dölja och koppla loss, CSV, språk, uträknad tabell, officiell tabell och serielista, straffläggning, powerplay och +/-).
-- U20 SM-serien (Ässät): matcher, mål, assist, utvisningsminuter och +/- för alla 35 spelare stämmer exakt mot tulospalvelus serielista. MIF U13: den uträknade tabellen stämmer med matchsiffrorna.
+- `node --test test/`: 14 tester (målvakter, hämtning, låsning och +/- som finns kvar, officiell +/-, krockval, filter och skärmbildsläge, serie utan resultat, dölja och koppla loss, CSV, språk, uträknad tabell, officiell tabell och serielista, straffläggning, powerplay och +/-).
+- U20 SM-serien (Ässät): matcher, mål, assist, utvisningsminuter och +/- för alla 35 spelare stämmer exakt mot tulospalvelus serielista. Målvakter: matcher i mål, räddningar och insläppta stämmer exakt för alla tre mot `getgoalkeepers`. Målvaktsvinster = lagets vinster (U20 7, U13 4). Minuter per match: U13 45, U20 58–65 (målvakt ute i slutet, förlängning). MIF U13: den uträknade tabellen stämmer med matchsiffrorna.
 - **Inte testat på riktiga telefoner.**
 
 ## Idéer som inte är gjorda
