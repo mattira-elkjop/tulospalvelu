@@ -131,7 +131,7 @@ MIF U13: `season=2027, subSerieId=4378, teamId=1368627176, serieId=1787`.
 **Datamodell (tillägg):** `season.tp = {season, ssid, tid, serieId}` (kopplingen), `season.tpAt` (senast hämtat), `season.tpNext` (nästa 3 matcher), `match.gid` (tulospalvelus GameID). CSV: ny sista kolumn `tp_id` på `match`-rader och `installning`-rader `tp_season`, `tp_serieid`, `tp_lagid`, `tp_serie`. Äldre filer utan dessa går fortfarande att importera.
 
 **Hämtning (`tpSync`):** `getgames` → färdiga matcher (`GameStatus===2`, `DeniedResults` falskt) som inte redan har en match med samma `gid` (alla vid "Hämta om alla matcher"). För varje match hämtas protokoll och laguppställning parallellt, och `tpImportGame` ersätter matchens händelser:
-- Deltagare = lagets spelare i `getsummary`. Spelare matchas först på exakt namn (nummer kan skilja mellan matcher, t.ex. en spelare som är #11 i truppen men bar #12 i en match), sedan på nummer, annars läggs de till. Namn görs om från `VERSALER` till `Versaler`.
+- Truppen (`getteamserieroster`) hämtas vid varje synk, så att nya spelare kommer med. Deltagare = lagets spelare i `getsummary`. Spelare matchas först på exakt namn (nummer kan skilja mellan matcher, t.ex. en spelare som är #11 i truppen men bar #12 i en match), sedan på nummer, annars läggs de till. Namn görs om från `VERSALER` till `Versaler`.
 - Mål (`Type:"Goal"`) räknas bara om lagets löpande ställning ökar. Missade straffslag loggas som mål med `GoalType:"RL0"` men ändrar inte ställningen.
 - Eget mål → `goals` (målskytt, assist via tröjnummer, `ice` från fältet `Plus`). Motståndarmål → `ga` (`ice` från `Minus`). `Plus`/`Minus` är mellanslagsseparerade tröjnummer och finns bara i serier som för +/- (inte U13). Finns de slås `season.pm` på automatiskt.
 - Utvisningar → `pens`. Lagstraff (tröja 0, t.ex. för många spelare på isen) räknas inte på någon spelare.
@@ -139,6 +139,8 @@ MIF U13: `season=2027, subSerieId=4378, teamId=1368627176, serieId=1787`.
 - U10/U11 (t.ex. Leijonaliiga) har `DeniedResults=1`, så där finns inga resultat att hämta.
 
 **Verifierat (2026-11-23):** MIF U13: 14 matcher, 55–88 i mål, och spelade matcher, mål, assist och utvisningsminuter per spelare stämmer exakt mot tulospalvelus egna summeringar (`getsummary`). En andra hämtning hittar inga nya matcher, CSV-export/import behåller koppling och `gid` med identisk statistik, och "Nytt lag från tulospalvelu" fungerar (testat med Diskos Punainen, 14 matcher). Inga JS-fel. `t.py` är inte uppdaterad eller körd för v3.
+
+**Inga namn i repot:** repot är publikt på GitHub, och inga spelarnamn får finnas där (användarens krav). `SEED` i `app.js` är därför tom, och MIF-säsongen startar kopplad men utan spelare. Truppen fylls i vid första "Hämta matcher". Testdata och Excel-skriptet använder platshållare ("Spelare 5"). Lägg aldrig in riktiga namn i koden, i data-filerna eller i dokumentationen. Exporterade CSV-filer innehåller namn och ska inte checkas in.
 
 ## Molnappen (version 2), `src/molnapp`
 
@@ -165,7 +167,7 @@ proxy/worker.js                   Cloudflare Worker-proxy till tulospalvelu
 proxy/server.js                   lokal server + proxy (node proxy/server.js)
 src/filapp/t.py                   Playwright-test
 src/molnapp/index.html, mock.js   molnversionen + db-mock
-src/excel/build.py, check.py, Intern_poangliga_MIF_U13.xlsx
+src/excel/build.py, check.py     (xlsx-filen genereras av build.py och finns inte i repot)
 data/MIF_U13_databas.csv          startdata v2 (lag + spelare, inga matcher)
 data/gammalt_format_v1_exempel.csv  v1-exempel för importtest
 ```

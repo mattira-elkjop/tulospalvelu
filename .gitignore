@@ -4,3 +4,8 @@ __pycache__/
 node_modules/
 .DS_Store
 Thumbs.db
+
+# Exporterade CSV-filer från appen innehåller spelarnamn
+*_20[0-9][0-9]-[0-9][0-9]-[0-9][0-9].csv
+lagdata_*.csv
+*.xlsx

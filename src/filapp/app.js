@@ -10,7 +10,7 @@ const TITLES={pts:"Poängliga",g:"Målliga",a:"Assistliga",u:"Utvisningsliga",pm
 /* ---------- lagring (localStorage på den här enheten) ---------- */
 const KEY="lp_data_v1";
 let storageOK=true;
-const SEED=[]; /* Inga namn i koden: spelarna hämtas från tulospalvelu. */
+const SEED=[]; /* Inga namn i koden: spelarna hämtas från tulospalvelu. */ /* Inga namn i koden: spelarna hämtas från tulospalvelu. */
 function newSeason(lag,serie,sasong,players,created){return {id:uid(),lag,serie:serie||"",sasong:sasong||"",created:created||Date.now(),pm:false,players:players||[],matches:[],goals:[],ga:[],pens:[]}}
 function seedData(){
   const s=newSeason("MIF","U13 Valkoinen, lohko 3b","2026–2027",SEED.map(([nr,name])=>({id:uid(),nr,name,pos:nr>=90?"MV":"UP"})),1);
@@ -109,7 +109,7 @@ function viewLista(){
   const fmt=(c,v)=>c==="pm"?fmtPM(v):(v||"-");
   const head=`<div class="row head"><div>#</div><div>Nr</div><div class="nm nmh">Spelare</div>${cols.map(([c,t])=>`<div class="${c===k?"hlh":""}">${t}</div>`).join("")}</div>`;
   const body=rows.length?rows.map(r=>`<div class="row"><div class="rk ${r.rank<=3?"r"+r.rank:""}">${r.rank}</div><div class="mu">${esc(r.p.nr)}</div><div class="nm"><span>${esc(r.p.name)}</span><div class="bar"><i style="width:${Math.round(Math.max(0,r[k])/max*100)}%"></i></div></div>${cols.map(([c])=>`<div class="${c===k?"hl":(r[c]||c==="pm"?"":"mu")}${c==="gp"?" gpc":""}">${fmt(c,r[c])}</div>`).join("")}</div>`).join("")
-    :`<div class="empty">${players.length?(s.matches.length?"Ingen statistik i den här listan ännu.":"Inga matcher ännu. Lägg till en under Matcher."):"Inga spelare ännu. Lägg till dem under Spelare."}</div>`;
+    :`<div class="empty">${s.matches.length?"Ingen statistik i den här listan ännu.":s.tp?"Inga matcher ännu. Tryck på ↻ Hämta matcher.":players.length?"Inga matcher ännu. Lägg till en under Matcher.":"Inga spelare ännu. Lägg till dem under Spelare."}</div>`;
   const card=`${banner()}<div class="table" style="--cols:${tmpl}">${head}${body}</div>`;
   if(S.shot)return card+`<div class="hint"><span>Tryck på rubriken för att avsluta</span></div>`;
   const segs=[["pts","Poäng"],["g","Mål"],["a","Assist"],["u","Utv"]];if(s.pm)segs.push(["pm","+/-"]);
@@ -544,6 +544,11 @@ async function tpSync(force){
     const {season,ssid,tid}=s.tp;
     const data=await tp("helpers/getgames",{season,subSerieId:ssid,teamid:tid,districtid:0,gamedays:3,dog:"",levelid:-1,dwl:0});
     const games=(Array.isArray(data)?data:[]).flatMap(l=>l.Games||[]).filter(g=>g.HomeTeam===tid||g.AwayTeam===tid);
+    /* Truppen hämtas varje gång, så att nya spelare kommer med även innan de spelat */
+    if(s.tp.serieId){
+      try{const r=await tp("helpers/getteamserieroster",{season,teamid:tid,serieId:s.tp.serieId,lang:"fi"});
+        (r.Players||[]).forEach(p=>tpPlayer(s,p.JerseyNr,tpName(p.FirstName,p.LastName),p.RoleAbbrv,added))}catch(e){}
+    }
     s.tpNext=games.filter(g=>g.GameStatus===0).slice(0,3).map(g=>({date:normDate(g.GameDate),time:(g.GameTime||"").slice(0,5),opp:g.HomeTeam===tid?g.AwayTeamAbbrv:g.HomeTeamAbbrv,home:g.HomeTeam===tid,rink:g.RinkName||""}));
     const have=new Set(s.matches.filter(m=>m.gid).map(m=>m.gid));
     const done=games.filter(g=>g.GameStatus===2&&!g.DeniedResults);
